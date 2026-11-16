@@ -1,6 +1,6 @@
 ;;; visual-line-mode-org.el --- Wrap prose, clip Org tables -*- lexical-binding: t; -*-
 
-;; Version: 0.1.4
+;; Version: 0.1.5
 ;; Package-Requires: ((emacs "30.1") (org "9.7"))
 ;; Keywords: convenience, outlines
 
@@ -28,6 +28,8 @@
 (defvar-local visual-line-mode-org--invisibility-state nil)
 (defvar-local visual-line-mode-org--owned-invisibility-spec nil)
 (defvar-local visual-line-mode-org--line-move-state nil)
+(defvar visual-line-mode-org--line-move-buffer nil
+  "Buffer whose navigation setting is temporarily changed for a command.")
 (defvar visual-line-mode-org-mode)
 
 (defun visual-line-mode-org--clear ()
@@ -225,6 +227,41 @@ With N, move forward N - 1 lines first."
     (let ((visual-line-mode-org-mode nil))
       (funcall (or (command-remapping #'move-end-of-line) #'move-end-of-line) n))))
 
+(defun visual-line-mode-org--scroll-page (command arg)
+  "Run native scroll COMMAND with ARG using the rendered table geometry."
+  (if (not (and visual-line-mode-org-mode (visual-line-mode-org--table)))
+      (funcall command arg)
+    (let* ((state (visual-line-mode-org--state (selected-window)))
+           (offset (plist-get state :offset))
+           (column (let ((buffer-invisibility-spec nil)) (current-column)))
+           (visual-column (current-column)))
+      ;; Native scrolling miscalculates backward pages from a concealed row
+      ;; prefix.  Measure the page with a zero-offset table viewport instead.
+      (beginning-of-line)
+      (visual-line-mode-org--refresh)
+      (unwind-protect
+          (funcall command arg)
+        (visual-line-mode-org--clear)
+        (setf (plist-get state :offset) offset)
+        (if (visual-line-mode-org--table)
+            (if goal-column
+                (move-to-column goal-column)
+              (let ((buffer-invisibility-spec nil)) (move-to-column column)))
+          (vertical-motion (cons visual-column 0)))))))
+
+(defun visual-line-mode-org-scroll-up-command (&optional arg)
+  "Scroll a rendered page up, accepting the native prefix ARG."
+  (interactive "^P")
+  (visual-line-mode-org--scroll-page #'scroll-up-command arg))
+
+(defun visual-line-mode-org-scroll-down-command (&optional arg)
+  "Scroll a rendered page down, accepting the native prefix ARG."
+  (interactive "^P")
+  (visual-line-mode-org--scroll-page #'scroll-down-command arg))
+
+(put 'visual-line-mode-org-scroll-up-command 'scroll-command t)
+(put 'visual-line-mode-org-scroll-down-command 'scroll-command t)
+
 (defvar visual-line-mode-org-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c <right>") #'visual-line-mode-org-scroll-left)
@@ -243,24 +280,42 @@ With N, move forward N - 1 lines first."
             #'visual-line-mode-org-move-beginning-of-line)
 (define-key visual-line-mode-org-mode-map [remap move-end-of-line]
             #'visual-line-mode-org-move-end-of-line)
+(define-key visual-line-mode-org-mode-map [remap scroll-up-command]
+            #'visual-line-mode-org-scroll-up-command)
+(define-key visual-line-mode-org-mode-map [remap scroll-down-command]
+            #'visual-line-mode-org-scroll-down-command)
 
 (defun visual-line-mode-org--restore-line-move ()
-  "Restore the navigation setting temporarily changed for a command."
-  (when visual-line-mode-org--line-move-state
-    (if (car visual-line-mode-org--line-move-state)
-        (setq-local line-move-visual (cdr visual-line-mode-org--line-move-state))
-      (kill-local-variable 'line-move-visual))
-    (setq visual-line-mode-org--line-move-state nil)))
+  "Restore navigation in the originating buffer, even after a buffer switch."
+  (when (buffer-live-p visual-line-mode-org--line-move-buffer)
+    (with-current-buffer visual-line-mode-org--line-move-buffer
+      (when visual-line-mode-org--line-move-state
+        (if (car visual-line-mode-org--line-move-state)
+            (setq-local line-move-visual (cdr visual-line-mode-org--line-move-state))
+          (kill-local-variable 'line-move-visual))
+        (setq visual-line-mode-org--line-move-state nil))))
+  (setq visual-line-mode-org--line-move-buffer nil)
+  (remove-hook 'post-command-hook #'visual-line-mode-org--restore-line-move))
 
 (defun visual-line-mode-org--pre-command ()
   "Let commands operate without this mode's clipping overlays."
   (visual-line-mode-org--restore-line-move)
-  (visual-line-mode-org--clear)
-  (when (and (memq this-command '(next-line previous-line))
-             (visual-line-mode-org--table))
+  ;; Page scrolling needs the clipped geometry, including when starting in
+  ;; prose with a table elsewhere in the same window.
+  (unless (memq this-command '(scroll-up-command scroll-down-command
+                              visual-line-mode-org-scroll-up-command
+                              visual-line-mode-org-scroll-down-command))
+    (visual-line-mode-org--clear))
+  ;; User commands may call `next-line' or `previous-line' indirectly (for
+  ;; example, PageDown bound to a lambda that moves 35 lines).
+  (when (visual-line-mode-org--table)
     (setq visual-line-mode-org--line-move-state
           (cons (local-variable-p 'line-move-visual) line-move-visual))
-    (setq-local line-move-visual nil)))
+    (setq visual-line-mode-org--line-move-buffer (current-buffer))
+    (setq-local line-move-visual nil)
+    ;; The command may switch buffers, so a local post-command hook alone
+    ;; cannot guarantee restoration.  This global hook lasts one command.
+    (add-hook 'post-command-hook #'visual-line-mode-org--restore-line-move)))
 
 (defun visual-line-mode-org--post-command ()
   "Restore normal prose navigation before Emacs adjusts point."

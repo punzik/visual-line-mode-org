@@ -406,6 +406,88 @@
       (should-not (invisible-p (1- end)))
       (should (vlorg-test--one-screen-row-p)))))
 
+(defconst vlorg-test--large-table
+  (concat "*** Large table\n| ID | Description | SHA |\n|----+-------------+-----|\n"
+          (mapconcat (lambda (n)
+                       (format "| %03d | %s | =%040x= |"
+                               n (make-string 150 ?x) n))
+                     (number-sequence 1 400) "\n")
+          "\n"))
+
+(defun vlorg-test--page-trace (enabled bindings &optional column prose)
+  "Trace page keys with ENABLED clipping and BINDINGS, starting at COLUMN."
+  (vlorg-test--buffer (if prose
+                         (apply #'concat (make-list 400
+                                                   (concat (make-string 200 ?x) "\n")))
+                       vlorg-test--large-table)
+    (use-local-map (copy-keymap (current-local-map)))
+    (when (eq bindings 'wrapper)
+      ;; Deliberately reproduce the user's commands, not `forward-line'.
+      (with-suppressed-warnings ((interactive-only next-line previous-line))
+        (local-set-key [next] (lambda () (interactive) (next-line 35)))
+        (local-set-key [prior] (lambda () (interactive) (previous-line 35)))))
+    (setq-local truncate-lines t
+                display-line-numbers t
+                org-hide-emphasis-markers t
+                scroll-preserve-screen-position t)
+    (org-indent-mode 1)
+    (font-lock-ensure)
+    (forward-line 69)
+    (forward-char (or column 0))
+    (when prose (visual-line-mode 1))
+    (when enabled (visual-line-mode-org-mode 1))
+    (set-window-start (selected-window)
+                      (save-excursion
+                        (goto-char (point-min)) (forward-line 49) (point)))
+    (redisplay t)
+    (let ((trace nil))
+      (dolist (event '(nil next next prior prior))
+        (when event (execute-kbd-macro (vector event)))
+        (redisplay t)
+        (push (list (line-number-at-pos)
+                    (- (point) (line-beginning-position))
+                    (line-number-at-pos (window-start)))
+              trace))
+      (nreverse trace))))
+
+(ert-deftest vlorg-restore-navigation-after-buffer-switch ()
+  (vlorg-test--buffer vlorg-test--reported-table
+    (visual-line-mode-org-mode 1)
+    (let ((original line-move-visual)
+          (local (local-variable-p 'line-move-visual))
+          (this-command 'switch-to-buffer))
+      (visual-line-mode-org--pre-command)
+      (should-not line-move-visual)
+      (with-temp-buffer (run-hooks 'post-command-hook))
+      (should (eq line-move-visual original))
+      (should (eq (local-variable-p 'line-move-visual) local))
+      (should-not visual-line-mode-org--line-move-buffer)
+      (should-not (memq #'visual-line-mode-org--restore-line-move
+                        (default-value 'post-command-hook))))))
+
+(ert-deftest vlorg-keyboard-page-wrappers-in-tables ()
+  (skip-unless (not noninteractive))
+  (dolist (column '(0 120))
+    (let ((baseline (vlorg-test--page-trace nil 'wrapper column))
+          (actual (vlorg-test--page-trace t 'wrapper column)))
+      (should (equal (mapcar #'car actual) '(70 105 140 105 70)))
+      (should (equal actual baseline)))))
+
+(ert-deftest vlorg-keyboard-native-pages-in-tables ()
+  (skip-unless (not noninteractive))
+  (let ((baseline (vlorg-test--page-trace nil 'native 0)))
+    (dolist (column '(0 120))
+      (let ((actual (vlorg-test--page-trace t 'native column)))
+        (should (equal (mapcar #'car actual) (mapcar #'car baseline)))
+        (should (equal (mapcar #'caddr actual) (mapcar #'caddr baseline)))
+        (should (cl-every (lambda (entry) (= (cadr entry) column)) actual))))))
+
+(ert-deftest vlorg-keyboard-pages-in-prose ()
+  (skip-unless (not noninteractive))
+  (dolist (bindings '(wrapper native))
+    (should (equal (vlorg-test--page-trace t bindings 0 t)
+                   (vlorg-test--page-trace nil bindings 0 t)))))
+
 (ert-deftest vlorg-real-redisplay ()
   "Check actual screen coordinates, not just buffer properties."
   (skip-unless (not noninteractive))
