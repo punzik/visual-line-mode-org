@@ -1,6 +1,6 @@
 ;;; visual-line-mode-org.el --- Wrap prose, clip Org tables -*- lexical-binding: t; -*-
 
-;; Version: 0.1.6
+;; Version: 0.1.7
 ;; Package-Requires: ((emacs "30.1") (org "9.7"))
 ;; Keywords: convenience, outlines
 
@@ -33,6 +33,7 @@
 (defvar visual-line-mode-org--line-move-buffer nil
   "Buffer whose navigation setting is temporarily changed for a command.")
 (defvar visual-line-mode-org-mode)
+(defvar org-pretty-table-mode)
 
 (defun visual-line-mode-org--clear ()
   "Remove only overlays owned by this mode."
@@ -63,14 +64,53 @@ Table-looking lines in source and example blocks are not tables."
         (cons (org-element-property :begin table)
               (org-element-property :end table))))))
 
-(defun visual-line-mode-org--hide (start end window)
-  "Conceal START to END in WINDOW without changing the buffer text."
+(defun visual-line-mode-org--overlay (start end window)
+  "Create an owned overlay from START to END in WINDOW."
   (when (< start end)
     (let ((overlay (make-overlay start end nil nil nil)))
       (overlay-put overlay 'window window)
-      (overlay-put overlay 'invisible 'visual-line-mode-org)
       (overlay-put overlay 'visual-line-mode-org t)
-      (push overlay visual-line-mode-org--overlays))))
+      (push overlay visual-line-mode-org--overlays)
+      overlay)))
+
+(defun visual-line-mode-org--hide (start end window)
+  "Conceal START to END in WINDOW without changing the buffer text."
+  (when-let* ((overlay (visual-line-mode-org--overlay start end window)))
+    (overlay-put overlay 'invisible 'visual-line-mode-org)))
+
+(defun visual-line-mode-org--pretty-runs (start end)
+  "Return length-preserving org-pretty-table display runs in START..END.
+Each entry is (BEGIN END STRING).  Other display specifications are left alone."
+  (when (bound-and-true-p org-pretty-table-mode)
+    (let ((position start) runs)
+      (while (< position end)
+        (let ((next (next-single-property-change position 'display nil end))
+              (display (get-text-property position 'display)))
+          (when (and (stringp display)
+                     (= (length display) (- next position))
+                     (= (string-width display) (length display))
+                     (string-match-p "\\`[-+|]+\\'"
+                                     (buffer-substring-no-properties position next)))
+            (push (list position next display) runs))
+          (setq position next)))
+      (nreverse runs))))
+
+(defun visual-line-mode-org--pretty-view (left right window runs)
+  "Show only the visible part LEFT..RIGHT of pretty display RUNS in WINDOW."
+  (dolist (run runs)
+    (let* ((begin (nth 0 run)) (end (nth 1 run)) (display (nth 2 run))
+           (mask (visual-line-mode-org--overlay begin end window)))
+      ;; A non-replacing display spec shadows the underlying replacement.
+      ;; Invisible overlays can then hide the parts outside the viewport.
+      (overlay-put mask 'display '(when nil . ""))
+      (overlay-put mask 'priority 1)
+      (let ((position (max begin left)) (limit (min end right)))
+        (while (< position limit)
+          (let ((glyph (visual-line-mode-org--overlay position (1+ position) window)))
+            (overlay-put glyph 'display (substring display (- position begin)
+                                                  (1+ (- position begin))))
+            (overlay-put glyph 'priority 2))
+          (setq position (1+ position)))))))
 
 (defun visual-line-mode-org--column-position (column end)
   "Find a position at or before COLUMN, no later than END.
@@ -88,29 +128,33 @@ Do not split a wide character or tab across the viewport edge."
 (defun visual-line-mode-org--row-span (window offset width)
   "Return visible bounds of this row at OFFSET and WIDTH in WINDOW."
   (let* ((end (line-end-position))
-         (left (visual-line-mode-org--column-position offset end))
          (available (visual-line-mode-org--row-width window width))
-         ;; Measure from the new origin, particularly for tabs after scrolling.
-         (motion (compute-motion left '(0 . 0) end (cons available 0)
-                                 most-positive-fixnum nil window))
-         (right (car motion)))
-    (when (and (> (nth 1 motion) available) (> right left))
-      (setq right (1- right)))
-    (cons left right)))
-
-(defun visual-line-mode-org--row-clips (window offset width)
-  "Return clipping ranges for the row at OFFSET and WIDTH in WINDOW."
-  (let ((start (line-beginning-position))
-        (end (line-end-position))
-        (span (visual-line-mode-org--row-span window offset width)))
-    (list (list start (car span) window)
-          (list (cdr span) end window))))
+         (runs (visual-line-mode-org--pretty-runs (line-beginning-position) end))
+         masks)
+    (unwind-protect
+        (progn
+          ;; Pretty replacements are one glyph per source character, but a
+          ;; whole dash run is otherwise treated as one indivisible object.
+          (dolist (run runs)
+            (let ((mask (make-overlay (car run) (cadr run))))
+              (overlay-put mask 'display '(when nil . ""))
+              (overlay-put mask 'priority 1)
+              (push mask masks)))
+          (let* ((left (visual-line-mode-org--column-position offset end))
+                 (motion (compute-motion left '(0 . 0) end (cons available 0)
+                                         most-positive-fixnum nil window))
+                 (right (car motion)))
+            (when (and (> (nth 1 motion) available) (> right left))
+              (setq right (1- right)))
+            (cons left right)))
+      (mapc #'delete-overlay masks))))
 
 (defun visual-line-mode-org--refresh (&rest _ignored)
   "Rebuild clipping overlays for windows displaying this buffer."
   (when (and visual-line-mode-org-mode (not visual-line-mode-org--updating))
     (let ((visual-line-mode-org--updating t)
-          (ranges nil))
+          (ranges nil)
+          (pretty-views nil))
       (visual-line-mode-org--clear)
       (maphash (lambda (window state)
                  (unless (and (window-live-p window)
@@ -121,6 +165,8 @@ Do not split a wide character or tab across the viewport edge."
       (save-excursion
         (save-restriction
           (widen)
+          (when (bound-and-true-p org-pretty-table-mode)
+            (font-lock-ensure))
           (dolist (window (get-buffer-window-list (current-buffer) nil t))
             (let* ((state (visual-line-mode-org--state window))
                    (width (visual-line-mode-org--width window))
@@ -156,15 +202,22 @@ Do not split a wide character or tab across the viewport edge."
                 (beginning-of-line)
                 (let ((bounds (visual-line-mode-org--table)))
                   (when bounds
-                    (setq ranges
-                          (nconc (visual-line-mode-org--row-clips
-                                  window (if (equal bounds table) offset 0) width)
-                                 ranges))))
+                    (let* ((start (line-beginning-position))
+                           (end (line-end-position))
+                           (runs (visual-line-mode-org--pretty-runs start end))
+                           (span (visual-line-mode-org--row-span
+                                  window (if (equal bounds table) offset 0) width)))
+                      (push (list start (car span) window) ranges)
+                      (push (list (cdr span) end window) ranges)
+                      (when runs
+                        (push (list (car span) (cdr span) window runs) pretty-views)))))
                 (forward-line 1))))))
       ;; Defer overlays until all windows are measured.  Keep Org's own
       ;; invisibility (emphasis, links, folding) intact throughout measurement.
       (dolist (range ranges)
-        (apply #'visual-line-mode-org--hide range)))))
+        (apply #'visual-line-mode-org--hide range))
+      (dolist (view pretty-views)
+        (apply #'visual-line-mode-org--pretty-view view)))))
 
 (defun visual-line-mode-org-scroll-left (&optional columns)
   "Reveal COLUMNS more columns to the right in the table at point.

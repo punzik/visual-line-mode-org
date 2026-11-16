@@ -4,6 +4,9 @@
 (require 'isearch)
 (require 'visual-line-mode-org)
 
+(defvar org-pretty-table-mode)
+(defvar org-pretty-table-charset)
+
 (defmacro vlorg-test--buffer (text &rest body)
   "Run BODY with TEXT displayed in an isolated Org buffer."
   (declare (indent 1) (debug t))
@@ -610,6 +613,120 @@
           (should-not (plist-get first :goal))
           (should (eql (plist-get first :temporary) 0))
           (should (plist-get second :visual-bol)))))))
+
+(defconst vlorg-test--pretty-table
+  (concat "Text\n| Title | " (make-string 1000 ?x) " |\n"
+          "|-------+" (make-string 1002 ?-) "|\n"
+          "| Body | " (make-string 1000 ?y) " |\nAfter.\n"))
+
+(defun vlorg-test--pretty-properties ()
+  "Install the length-preserving replacements used by org-pretty-table."
+  (font-lock-ensure)
+  (setq-local org-pretty-table-mode t)
+  (save-excursion
+    (goto-char (point-min))
+    (while (re-search-forward "[-+|]+" nil t)
+      (put-text-property
+       (match-beginning 0) (match-end 0) 'display
+       (apply #'string (mapcar (lambda (char)
+                                (pcase char (?- ?─) (?+ ?┼) (?| ?│)))
+                              (string-to-list (match-string 0))))))))
+
+(defun vlorg-test--pretty-rows-fit ()
+  "Assert that every table row occupies one screen row in the selected window."
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line 1)
+    (dotimes (_ 3)
+      (should (vlorg-test--one-screen-row-p))
+      (forward-line 1))))
+
+(ert-deftest vlorg-pretty-replacements-clip-without-changing-properties ()
+  (vlorg-test--buffer vlorg-test--pretty-table
+    (visual-line-mode 1)
+    (vlorg-test--pretty-properties)
+    (set-buffer-modified-p nil)
+    (let ((original (buffer-string))
+          (tick (buffer-chars-modified-tick))
+          (undo buffer-undo-list))
+      (visual-line-mode-org-mode 1)
+      (vlorg-test--pretty-rows-fit)
+      (save-excursion
+        (forward-line 2)
+        (let ((glyph (get-char-property (+ 2 (point)) 'display (selected-window))))
+          (should (stringp glyph))
+          (should (equal glyph "─"))))
+      (should-not (buffer-modified-p))
+      (should (= tick (buffer-chars-modified-tick)))
+      (should (equal undo buffer-undo-list))
+      (visual-line-mode-org-mode -1)
+      (should (equal-including-properties original (buffer-string)))
+      (should org-pretty-table-mode)
+      (forward-line 2)
+      (should-not (vlorg-test--one-screen-row-p)))))
+
+(ert-deftest vlorg-pretty-replacements-scroll ()
+  (vlorg-test--buffer vlorg-test--pretty-table
+    (vlorg-test--pretty-properties)
+    (forward-line 3)
+    (visual-line-mode-org-mode 1)
+    (visual-line-mode-org-scroll-left 100)
+    (vlorg-test--pretty-rows-fit)
+    (save-excursion
+      (goto-char (point-min)) (forward-line 2) (forward-char 110)
+      (should (equal (get-char-property (point) 'display (selected-window)) "─")))
+    (visual-line-mode-org-scroll-right 100)
+    (vlorg-test--pretty-rows-fit)))
+
+(ert-deftest vlorg-pretty-replacements-in-two-windows ()
+  (vlorg-test--buffer vlorg-test--pretty-table
+    (delete-other-windows)
+    (vlorg-test--pretty-properties)
+    (forward-line 3)
+    (let ((second (split-window-right 30)))
+      (set-window-point second (1- (line-end-position)))
+      (visual-line-mode-org-mode 1)
+      (dolist (window (list (selected-window) second))
+        (with-selected-window window
+          (vlorg-test--pretty-rows-fit)))
+      (should-not (= (plist-get (visual-line-mode-org--state (selected-window)) :offset)
+                     (plist-get (visual-line-mode-org--state second) :offset)))
+      (window-resize (selected-window) 5 t)
+      (visual-line-mode-org--refresh)
+      (dolist (window (list (selected-window) second))
+        (with-selected-window window
+          (vlorg-test--pretty-rows-fit))))))
+
+(declare-function org-pretty-table-mode "org-pretty-table" (&optional arg))
+
+(ert-deftest vlorg-pretty-table-mode-integration ()
+  (skip-unless (not noninteractive))
+  (skip-unless (require 'org-pretty-table nil t))
+  (dolist (pretty-first '(nil t))
+    (dolist (charset '("┌┐└┘┬┤┴├┼─│" "╒╕╘╛╤╡╧╞╪═│"))
+      (vlorg-test--buffer vlorg-test--pretty-table
+        (setq-local org-pretty-table-charset charset)
+        (org-indent-mode 1)
+        (unwind-protect
+            (progn
+              (when pretty-first (org-pretty-table-mode 1))
+              (visual-line-mode-org-mode 1)
+              (unless pretty-first (org-pretty-table-mode 1))
+              (redisplay t)
+              (vlorg-test--pretty-rows-fit)
+              (let ((start (save-excursion (forward-line 2) (point)))
+                    (next (save-excursion (forward-line 3) (point))))
+                (should (= (- (cdr (posn-x-y (posn-at-point next)))
+                              (cdr (posn-x-y (posn-at-point start))))
+                           (frame-char-height))))
+              (forward-line 3)
+              (visual-line-mode-org-scroll-left 100)
+              (redisplay t)
+              (vlorg-test--pretty-rows-fit)
+              (visual-line-mode-org-mode -1)
+              (should org-pretty-table-mode)
+              (should (stringp (get-text-property (line-beginning-position) 'display))))
+          (org-pretty-table-mode -1))))))
 
 (ert-deftest vlorg-real-redisplay ()
   "Check actual screen coordinates, not just buffer properties."
