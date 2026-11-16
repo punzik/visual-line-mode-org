@@ -1,6 +1,6 @@
 ;;; visual-line-mode-org.el --- Wrap prose, clip Org tables -*- lexical-binding: t; -*-
 
-;; Version: 0.1.1
+;; Version: 0.1.2
 ;; Package-Requires: ((emacs "30.1") (org "9.7"))
 ;; Keywords: convenience, outlines
 
@@ -187,12 +187,34 @@ This moves point into the viewport so automatic following does not undo it."
    (- (if columns (prefix-numeric-value columns)
         (max 1 (/ (visual-line-mode-org--width (selected-window)) 2))))))
 
+(defun visual-line-mode-org-beginning-of-line (&optional n)
+  "Run `org-beginning-of-line', using logical lines inside tables.
+With N, move forward N - 1 lines first."
+  (interactive "^p")
+  (let ((visual-line-mode (and visual-line-mode
+                               (not (visual-line-mode-org--table)))))
+    (org-beginning-of-line n)))
+
+(defun visual-line-mode-org-end-of-line (&optional n)
+  "Run `org-end-of-line', using logical lines inside tables.
+With N, move forward N - 1 lines first."
+  (interactive "^p")
+  (let ((visual-line-mode (and visual-line-mode
+                               (not (visual-line-mode-org--table)))))
+    (org-end-of-line n)))
+
 (defvar visual-line-mode-org-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c <right>") #'visual-line-mode-org-scroll-left)
     (define-key map (kbd "C-c <left>") #'visual-line-mode-org-scroll-right)
     map)
   "Keymap for `visual-line-mode-org-mode'.")
+
+;; Install outside `defvar' so reloading an already loaded package updates it.
+(define-key visual-line-mode-org-mode-map [remap org-beginning-of-line]
+            #'visual-line-mode-org-beginning-of-line)
+(define-key visual-line-mode-org-mode-map [remap org-end-of-line]
+            #'visual-line-mode-org-end-of-line)
 
 (defun visual-line-mode-org--restore-line-move ()
   "Restore the navigation setting temporarily changed for a command."
@@ -213,15 +235,18 @@ This moves point into the viewport so automatic following does not undo it."
     (setq-local line-move-visual nil)))
 
 (defun visual-line-mode-org--post-command ()
-  "Restore normal prose navigation and refresh table viewports."
-  (visual-line-mode-org--restore-line-move)
-  (visual-line-mode-org--refresh))
+  "Restore normal prose navigation before Emacs adjusts point."
+  ;; Do not clip here: point adjustment runs after post-command hooks.
+  ;; A hidden emphasis marker could merge with our hidden prefix and make
+  ;; backward adjustment jump to the preceding row.  Clip at redisplay.
+  (visual-line-mode-org--restore-line-move))
 
 (defun visual-line-mode-org--disable ()
   "Remove hooks and restore display state."
   (visual-line-mode-org--restore-line-move)
   (remove-hook 'pre-command-hook #'visual-line-mode-org--pre-command t)
   (remove-hook 'post-command-hook #'visual-line-mode-org--post-command t)
+  (remove-hook 'pre-redisplay-functions #'visual-line-mode-org--refresh t)
   (remove-hook 'after-change-functions #'visual-line-mode-org--refresh t)
   (remove-hook 'window-size-change-functions #'visual-line-mode-org--refresh t)
   (remove-hook 'window-buffer-change-functions #'visual-line-mode-org--refresh t)
@@ -279,6 +304,7 @@ Experimental: intended for fixed-pitch text without other table overlays."
       (when visual-line-mode-org--enabled-visual-line (visual-line-mode 1))
       (add-hook 'pre-command-hook #'visual-line-mode-org--pre-command nil t)
       (add-hook 'post-command-hook #'visual-line-mode-org--post-command nil t)
+      (add-hook 'pre-redisplay-functions #'visual-line-mode-org--refresh nil t)
       (add-hook 'after-change-functions #'visual-line-mode-org--refresh nil t)
       (add-hook 'window-size-change-functions #'visual-line-mode-org--refresh nil t)
       (add-hook 'window-buffer-change-functions #'visual-line-mode-org--refresh nil t)
