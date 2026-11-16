@@ -1,6 +1,6 @@
-| Метка  | Полный SHA                               | Что это                                                         |
+| Label  | Full SHA                                 | Description                                                     |
 |--------+------------------------------------------+-----------------------------------------------------------------|
-| =0171=   | =cc2f35b00a16aa83da38957100b31b2f2cb4384c= | тег/ветка =v0.17.1=                                               |
+| =0171=   | =cc2f35b00a16aa83da38957100b31b2f2cb4384c= | tag/branch =v0.17.1=                                              |
 | =master= | =d9da179ea12228a0e3f7c1358fedec2ab8971f73= | =origin/master=, =v0.18~preview.133.03+642=                         |
-| =oxcaml= | =6ad6682cbfb75b25cb1bc026b87e081440b84473= | =origin/oxcaml=, =v0.18~preview.133.03+642= (опубликованная версия) |
-| =106=    | =ae177dfe431b6cce40ee9fea2c2dfe2908733114= | =v0.18~preview.130.106+341= (локально установлен)                 |
+| =oxcaml= | =6ad6682cbfb75b25cb1bc026b87e081440b84473= | =origin/oxcaml=, =v0.18~preview.133.03+642= (published version)     |
+| =106=    | =ae177dfe431b6cce40ee9fea2c2dfe2908733114= | =v0.18~preview.130.106+341= (installed locally)                   |

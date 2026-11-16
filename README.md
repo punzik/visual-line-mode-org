@@ -1,80 +1,155 @@
 # visual-line-mode-org
 
-Экспериментальный minor mode для Emacs: обычный текст в Org переносится по ширине окна, строки таблиц обрезаются без переноса. Правая часть таблицы доступна собственной горизонтальной прокруткой. Содержимое файла не меняется.
+Wrap prose without wrapping Org tables.
 
-Проверено на Emacs 30.2 и Org 9.8.8.
+`visual-line-mode-org-mode` is an experimental Emacs minor mode that keeps
+paragraphs wrapped to the window width while displaying each Org table row on a
+single screen line. Wide tables are clipped at the window edge; move through the
+table or use the scrolling keys below to reveal the remaining columns.
 
-## Попробовать
+Only the display changes. Your file is not reformatted, and no line breaks are
+inserted.
 
-1. `M-x load-file RET` → выбрать `visual-line-mode-org.el`.
-2. Открыть `example.org`.
-3. `M-x visual-line-mode-org-mode`.
+## Project goals
 
-В таблице:
+- Make prose and wide tables comfortable to read in the same Org buffer.
+- Work with existing Emacs and Org installations, without patching either.
+- Keep document contents unchanged, including when viewing read-only buffers.
+- Update the table view as you edit or resize a window, with independent views
+  when the same buffer is shown in multiple windows.
+- Provide predictable keyboard navigation and access to off-screen columns.
+- Preserve familiar Org features, including indentation, hidden emphasis
+  markers, and supported table borders from `org-pretty-table-mode`.
+- Be easy to enable and disable, restoring the previous display settings when
+  disabled.
 
-- `C-c <right>` — показать столбцы правее;
-- `C-c <left>` — показать столбцы левее;
-- числовой префикс задаёт расстояние в текстовых колонках, например `C-u 20 C-c <right>`.
+## Requirements
 
-При переходе курсора за границу видимой части таблица прокручивается автоматически. Сдвигаются все строки текущей таблицы, а не остальные таблицы или текст. При выходе из таблицы сдвиг сбрасывается. У разных окон независимые области просмотра.
+- Emacs **30.1 or newer**.
+- Org **9.7 or newer**.
+- A **monospaced font** for table text.
 
-Отключение: снова `M-x visual-line-mode-org-mode`. Удаляются только overlays этого пакета; исходное состояние `visual-line-mode` и настройки, изменённые пакетом, восстанавливаются.
+Tested with Emacs 30.2 and Org 9.8.8 in both graphical and terminal Emacs.
+`org-pretty-table-mode` is optional; compatibility has been tested with version
+1.0.0 and its standard single- and double-line borders.
 
-## Подключить постоянно
+## Installation
+
+Download [`visual-line-mode-org.el`](visual-line-mode-org.el), or clone this
+repository. Place the file in a directory on your Emacs `load-path`, for example:
+
+```text
+~/.emacs.d/lisp/visual-line-mode-org/visual-line-mode-org.el
+```
+
+Add this to your Emacs configuration:
 
 ```elisp
-(add-to-list 'load-path "/путь/к/visual-line-mode-org")
+(add-to-list 'load-path
+             (expand-file-name "~/.emacs.d/lisp/visual-line-mode-org/"))
 (require 'visual-line-mode-org)
+```
+
+Restart Emacs or evaluate those forms. In an Org buffer, run:
+
+```text
+M-x visual-line-mode-org-mode
+```
+
+To enable it automatically in Org buffers, also add:
+
+```elisp
 (add-hook 'org-mode-hook #'visual-line-mode-org-mode)
 ```
 
-Режим сам включает `visual-line-mode`, если тот ещё не включён.
+You do not need to enable `visual-line-mode` separately: this mode enables it
+when necessary.
 
-Команды `org-beginning-of-line` / `org-end-of-line` (обычно Home/End)
-в таблицах переходят к началу/концу исходной строки. В обычном тексте
-сохраняется штатное поведение Org и Visual Line mode. Обработаны и прямые биндинги
-на функции Org, и штатные биндинги на `move-beginning-of-line` / `move-end-of-line`.
-Биндинги менять не нужно.
+### Try it without changing your configuration
 
-PageUp/PageDown поддерживают штатные `scroll-up-command` / `scroll-down-command`
-и пользовательские функции, вызывающие `next-line` / `previous-line` с числом
-строк (например, 35). В таблице такие вызовы считают логические строки;
-в обычном тексте сохраняется визуальная навигация. Штатная прокрутка учитывает
-обрезанное отображение таблицы и сохраняет колонку курсора.
+1. Run `M-x load-file` and select `visual-line-mode-org.el`.
+2. Open an Org file, such as the included [`example.org`](example.org).
+3. Run `M-x visual-line-mode-org-mode`.
 
-При переходе **таблица ↔ обычный текст** стрелками вверх/вниз или
-PageUp/PageDown курсор ставится в начало **логической** строки назначения.
-Запомненная колонка движения сбрасывается; пустая строка считается обычным
-текстом. Внутри таблицы и внутри текста колонка не сбрасывается. Это правило
-не применяется к мыши и поиску.
+Run the same command again to disable the mode. Any `visual-line-mode` setting
+that was already enabled remains enabled; otherwise, the previous display
+settings are restored.
 
-## Как устроено и ограничения прототипа
+## Scrolling wide tables
 
-Emacs не поддерживает `truncate-lines` для отдельных строк. Поэтому пакет скрывает части строк с помощью window-specific overlays. Это имитация обрезания, а не изменение механизма redisplay.
+With the cursor inside a table:
 
-- **Не используйте стандартные `scroll-left` / `scroll-right`:** штатная горизонтальная прокрутка отключает перенос во всём окне. Используйте команды пакета.
-- Рассчитано на **моноширинный шрифт**. Табуляции, широкие символы и обычный `org-indent-mode` покрыты тестами; пропорциональные шрифты, масштабирование отдельных фрагментов и сложные display-свойства не поддерживаются.
-- Поддержан `org-pretty-table-mode` (проверено с версией 1.0.0): стандартные одинарные и двойные рамки, в которых один исходный символ заменён одним моноширинным символом. Оба порядка включения режимов допустимы. Исходные свойства оформления не меняются и сохраняются при отключении нашего режима.
-- Другие пакеты, заменяющие отображение таблиц, произвольные `display`-спецификации и свёрнутые столбцы Org пока не поддерживаются.
-- Скрытый текст остаётся в буфере. Перед большинством команд overlays пакета снимаются, а перед перерисовкой — пересчитываются, после штатной коррекции курсора Emacs. Для штатной постраничной прокрутки обрезанное отображение сохраняется, чтобы правильно измерить страницу. `C-n` / `C-p` и стрелки вверх/вниз внутри таблицы перемещаются по логическим строкам, сохраняя колонку; в абзацах сохраняется визуальная навигация. Интеграция с isearch и мышью не отлажена.
-- Чтобы вернуться к обычному отображению при любой проблеме, отключите режим.
-- Прототип пересчитывает таблицы всего буфера после каждой команды/правки. Для больших документов оптимизация ещё не выполнена.
-- Строки с `|` внутри блоков исходного кода и примеров не считаются таблицами.
+| Key | Action |
+| --- | --- |
+| `C-c <right>` | Reveal columns farther to the right. |
+| `C-c <left>` | Reveal columns farther to the left. |
+| `C-u 20 C-c <right>` | Scroll right by 20 text columns. |
+| `C-u 20 C-c <left>` | Scroll left by 20 text columns. |
 
-## Тесты
+Without a numeric prefix, scrolling moves roughly half a window at a time.
+These commands also move the cursor into the visible area.
 
-```sh
-emacs --batch -Q -L . -l test/visual-line-mode-org-test.el \
-  -f ert-run-tests-batch-and-exit
-```
+The view follows the cursor when it moves beyond the visible columns. All rows
+of the current table scroll together; other tables and surrounding prose do not
+shift horizontally. Leaving the table resets its horizontal offset. Each window
+has its own table view.
 
-Для нужной версии Org добавьте `-L /путь/к/org-9.8.8` перед загрузкой тестов. В чистом Emacs на этой машине встроен Org 9.7.11, а пользовательский сервис использует Org 9.8.8.
+**Use these keys instead of Emacs's native `scroll-left` and `scroll-right`.**
+Native horizontal scrolling disables wrapping for the entire window, including
+prose.
 
-Проверка реального redisplay требует отдельного интерактивного Emacs:
+## Keyboard navigation
 
-```sh
-emacs -Q -nw -L /путь/к/org-9.8.8 -L . \
-  -l test/visual-line-mode-org-test.el
-```
+With standard Org bindings, no additional key configuration is needed:
 
-Затем `M-x ert RET t RET`. В batch пропускаются двенадцать интерактивных тестов экранных координат, клавиатурной навигации и интеграции. Для интеграционного теста с `org-pretty-table-mode` библиотека `org-pretty-table.el` должна быть в `load-path` (добавьте `-L /путь/к/org-pretty-table`); без неё этот тест пропускается. Остальные тесты совместимости не требуют стороннего пакета. Остальные проверяют перенос, прокрутку, редактирование, изменение ширины окна, два окна, read-only буфер и восстановление настроек.
+| Keys | Inside a table |
+| --- | --- |
+| Up / Down, `C-p` / `C-n` | Move by table rows, preserving the column. |
+| Home / End | Move to the beginning or end of the underlying table row. |
+| PageUp / PageDown | Scroll using the clipped table layout. |
+
+Custom PageUp/PageDown commands that call `next-line` or `previous-line` with a
+line count are also supported: inside tables they count actual table rows,
+not wrapped screen lines.
+
+Outside tables, normal Org and Visual Line navigation is retained, with one
+intentional boundary rule:
+
+> When Up/Down or PageUp/PageDown moves between a table and ordinary text, the
+> cursor moves to the beginning of the destination's **logical line**, and its
+> remembered movement column is reset.
+
+A logical line is a line in the file, even if it wraps across several screen
+lines. Blank lines count as ordinary text. The boundary rule does not apply to
+mouse clicks or search, and does not reset the column when moving within a
+table or within ordinary text.
+
+## Compatibility and limitations
+
+This is an experimental package. It uses window-specific overlays to clip rows,
+because Emacs does not provide a per-line `truncate-lines` setting. It does not
+open a separate table-editing window or modify the contents of your document.
+
+- **Supported Org features:** `org-indent-mode`, hidden emphasis markers,
+  tabs, wide characters, and line numbers are covered by tests. Table-like
+  lines inside source or example blocks are not treated as tables.
+- **Pretty table borders:** `org-pretty-table-mode` works with its standard
+  single- and double-line monospaced borders. Enable the modes in either order;
+  disabling this mode leaves the pretty-table formatting intact. Neither
+  `org-pretty-table` itself nor its original formatting properties are modified.
+- **Fonts and display changes:** proportional fonts, differently scaled text
+  within a table, arbitrary display replacements, other table-rendering
+  packages, and Org's shrunk columns are not supported.
+- **Mouse and search:** the boundary-reset rule deliberately leaves them alone,
+  but full mouse and incremental-search integration with clipped text has not
+  been verified.
+- **Large documents:** table views are rebuilt across the buffer after commands
+  and edits. Performance has not yet been optimized for very large files.
+
+If the display looks wrong, disable `visual-line-mode-org-mode` to return to the
+previous display settings. When reporting a problem, include your Emacs and Org
+versions, relevant modes and keybindings, and a small example table.
+
+## License
+
+GNU GPL version 3. See [LICENSE](LICENSE).

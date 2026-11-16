@@ -1,23 +1,23 @@
-#+title: Проверка visual-line-mode-org
+#+title: Trying visual-line-mode-org
 
-* Обычный текст
+* Ordinary text
 
-Это длинный абзац для проверки переноса по ширине окна. Уменьши ширину окна Emacs: текст должен занять несколько экранных строк. При этом таблица ниже должна остаться таблицей с одной экранной строкой на каждую строку данных, без изменения исходного файла.
+This is a long paragraph for trying out wrapping at the window edge. Make your Emacs window narrower: the text should occupy several screen lines. The table below should still display each data row on a single screen line, without changing the contents of the file.
 
-* Широкая таблица
+* A wide table
 
-Поставь курсор в таблицу. Используй C-c <right> и C-c <left>, чтобы посмотреть скрытые колонки. Эти команды перемещают курсор вместе с областью просмотра. Обычная горизонтальная прокрутка Emacs для этого не подходит.
+Move the cursor into the table. Use C-c <right> and C-c <left> to reveal the hidden columns. These commands move the cursor along with the table view. Native Emacs horizontal scrolling is not suitable for this.
 
-| Компонент | Корпус | Назначение                         | Примечание                                                                             | Количество |
-|-----------+--------+------------------------------------+----------------------------------------------------------------------------------------+------------|
-| STM32F401 | LQFP64 | Микроконтроллер основной платы      | Длинное примечание, которое не должно переносить строку таблицы даже в узком окне Emacs. |          2 |
-| LM358     | SOIC8  | Усилитель аналогового входа        | Здесь тоже есть достаточно длинный текст, чтобы таблица не помещалась по ширине окна.   |         12 |
-| 74HC595   | SOIC16 | Расширитель цифровых выходов       | Правая часть строки доступна собственной прокруткой таблицы.                            |          4 |
+| Component | Package | Purpose                    | Notes                                                                        | Quantity |
+|-----------+---------+----------------------------+------------------------------------------------------------------------------+----------|
+| STM32F401 | LQFP64  | Main board microcontroller | This long note should not wrap the table row, even in a narrow Emacs window. |        2 |
+| LM358     | SOIC8   | Analog input amplifier     | This row also contains enough text to make the table wider than the window.  |       12 |
+| 74HC595   | SOIC16  | Digital output expander    | Use the table scrolling commands to reveal the right-hand side of the row.   |        4 |
 
-Этот абзац после таблицы тоже должен переноситься независимо от того, какая часть таблицы сейчас видна. Когда курсор покидает таблицу, её область просмотра возвращается к левому краю.
+The paragraph after the table should also wrap, regardless of which columns are currently visible. When the cursor leaves the table, its view returns to the left edge.
 
-* Не таблица
+* Not a table
 
 #+begin_example
-| Это строка примера, а не Org-таблица. Она должна переноситься как обычный текст, если она окажется длиннее ширины окна Emacs.
+| This is a line in an example block, not an Org table. It should wrap like ordinary text if it is wider than the Emacs window.
 #+end_example
