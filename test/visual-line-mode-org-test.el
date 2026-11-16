@@ -6,6 +6,8 @@
 
 (defvar org-pretty-table-mode)
 (defvar org-pretty-table-charset)
+(defvar doom-modeline-icon)
+(defvar doom-modeline-column-zero-based)
 
 (defmacro vlorg-test--buffer (text &rest body)
   "Run BODY with TEXT displayed in an isolated Org buffer."
@@ -727,6 +729,109 @@
               (should org-pretty-table-mode)
               (should (stringp (get-text-property (line-beginning-position) 'display))))
           (org-pretty-table-mode -1))))))
+
+(ert-deftest vlorg-mode-line-restoration ()
+  (dolist (local '(nil t))
+    (dolist (format '(nil ("column %c %%")))
+      (vlorg-test--buffer vlorg-test--text
+        (if local (setq-local mode-line-format format)
+          (kill-local-variable 'mode-line-format))
+        (let ((original mode-line-format)
+              (was-local (local-variable-p 'mode-line-format)))
+          (visual-line-mode-org-mode 1)
+          (when (and local (null format)) (should-not mode-line-format))
+          (visual-line-mode-org-mode -1)
+          (should (eq original mode-line-format))
+          (should (eq was-local (local-variable-p 'mode-line-format))))))))
+
+(ert-deftest vlorg-mode-line-keeps-user-changes ()
+  (vlorg-test--buffer vlorg-test--text
+    (setq-local mode-line-format '("original %c"))
+    (let ((original mode-line-format))
+      (visual-line-mode-org-mode 1)
+      (setq-local mode-line-format (cons "prefix " mode-line-format))
+      (visual-line-mode-org-mode -1)
+      (should (equal mode-line-format (list "prefix " original))))
+    (visual-line-mode-org-mode 1)
+    (setq-local mode-line-format '("replacement %c"))
+    (visual-line-mode-org-mode -1)
+    (should (equal mode-line-format '("replacement %c")))))
+
+(defun vlorg-test--check-column-format (original window)
+  "Compare WINDOW's wrapped format with unclipped ORIGINAL."
+  (visual-line-mode-org--clear)
+  (let ((expected
+         (let ((buffer-invisibility-spec
+                (if (with-selected-window window
+                      (visual-line-mode-org--table))
+                    nil buffer-invisibility-spec)))
+           (with-selected-window window
+             (visual-line-mode-org--reset-column-cache))
+           (format-mode-line original nil window))))
+    (visual-line-mode-org--refresh)
+    (let ((point-before (point))
+          (spec buffer-invisibility-spec)
+          (actual (format-mode-line mode-line-format nil window)))
+      (should (equal-including-properties expected actual))
+      (should (= point-before (point)))
+      (should (eq spec buffer-invisibility-spec)))))
+
+(ert-deftest vlorg-mode-line-absolute-columns ()
+  (skip-unless (not noninteractive))
+  (dolist (original '("L%l:%4c/%C %% %b"
+                      (:eval (list "%l:" "%c/%C"))
+                      ((:propertize "A" face font-lock-keyword-face)
+                       (:propertize "%c" face font-lock-warning-face)
+                       " %% %b")
+                      ((:eval (if (mode-line-window-selected-p)
+                                  "ACTIVE " "INACTIVE ")) "%c")
+                      ((:propertize "%%" face font-lock-keyword-face) ":%c")))
+    (vlorg-test--buffer vlorg-test--text
+      (rename-buffer " *vlorg%column*" t)
+      (delete-other-windows)
+      (setq-local mode-line-format original)
+      (forward-line 2)
+      (forward-char 120)
+      (add-to-invisibility-spec 'vlorg-test-hidden)
+      (put-text-property (+ (line-beginning-position) 5)
+                         (+ (line-beginning-position) 15)
+                         'invisible 'vlorg-test-hidden)
+      (let ((second (split-window-right)))
+        (set-window-point second (+ (line-beginning-position) 180))
+        (visual-line-mode-org-mode 1)
+        (redisplay t)
+        (dotimes (_ 2)
+          (dolist (window (list (selected-window) second))
+            (vlorg-test--check-column-format original window)))
+        ;; Rendering must not change the visible-column semantics used by
+        ;; ordinary editor commands outside mode-line formatting.
+        (visual-line-mode-org--reset-column-cache)
+        (should (< (current-column) 120))
+        ;; Ordinary text keeps the usual treatment of invisible characters.
+        (goto-char (+ (point-min) 30))
+        (put-text-property (+ (point-min) 5) (+ (point-min) 15)
+                           'invisible 'vlorg-test-hidden)
+        (visual-line-mode-org--refresh)
+        (vlorg-test--check-column-format original (selected-window))))))
+
+(declare-function doom-modeline "doom-modeline-core" (key &optional default))
+
+(ert-deftest vlorg-doom-modeline-absolute-columns ()
+  (skip-unless (not noninteractive))
+  (skip-unless (require 'doom-modeline nil t))
+  (let ((doom-modeline-icon nil)
+        (column-number-mode t)
+        (line-number-mode t))
+    (dolist (zero-based '(nil t))
+      (let ((doom-modeline-column-zero-based zero-based))
+        (vlorg-test--buffer vlorg-test--text
+          (let ((original (list "%e" (doom-modeline 'main))))
+            (setq-local mode-line-format original)
+            (forward-line 2)
+            (forward-char 120)
+            (visual-line-mode-org-mode 1)
+            (redisplay t)
+            (vlorg-test--check-column-format original (selected-window))))))))
 
 (ert-deftest vlorg-real-redisplay ()
   "Check actual screen coordinates, not just buffer properties."

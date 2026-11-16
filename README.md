@@ -124,6 +124,17 @@ lines. Blank lines count as ordinary text. The boundary rule does not apply to
 mouse clicks or search, and does not reset the column when moving within a
 table or within ordinary text.
 
+## Mode-line column numbers
+
+Column indicators in the standard mode line and Doom Modeline show the absolute
+column in the original table row, not the column within its visible portion.
+Table source markup is included in this count, and tabs use their usual column
+widths. Your zero-based or one-based numbering preference is preserved.
+
+The existing mode-line layout is retained. Outside tables, normal column
+reporting is unchanged. If you replace your mode-line layout while this mode is
+active, toggle `visual-line-mode-org-mode` off and on to attach the new layout.
+
 ## Compatibility and limitations
 
 This is an experimental package. It uses window-specific overlays to clip rows,

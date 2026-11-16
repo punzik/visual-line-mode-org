@@ -1,6 +1,6 @@
 ;;; visual-line-mode-org.el --- Wrap prose, clip Org tables -*- lexical-binding: t; -*-
 
-;; Version: 0.1.7
+;; Version: 0.1.8
 ;; Package-Requires: ((emacs "30.1") (org "9.7"))
 ;; Keywords: convenience, outlines
 
@@ -28,12 +28,67 @@
 (defvar-local visual-line-mode-org--invisibility-state nil)
 (defvar-local visual-line-mode-org--owned-invisibility-spec nil)
 (defvar-local visual-line-mode-org--line-move-state nil)
+(defvar-local visual-line-mode-org--mode-line-state nil)
+(defconst visual-line-mode-org--mode-line-form
+  '(:eval (visual-line-mode-org--format-mode-line)))
 (defvar visual-line-mode-org--navigation-origin nil
   "Buffer, window, text tick and table status before vertical navigation.")
 (defvar visual-line-mode-org--line-move-buffer nil
   "Buffer whose navigation setting is temporarily changed for a command.")
 (defvar visual-line-mode-org-mode)
 (defvar org-pretty-table-mode)
+
+(defun visual-line-mode-org--reset-column-cache ()
+  "Invalidate Emacs's cached column without changing point."
+  (save-excursion
+    (let ((inhibit-field-text-motion t))
+      (beginning-of-line)
+      (current-column))))
+
+(defun visual-line-mode-org--original-mode-line ()
+  "Return this buffer's original, possibly inherited, mode-line format."
+  (if (car visual-line-mode-org--mode-line-state)
+      (cdr visual-line-mode-org--mode-line-state)
+    (default-value 'mode-line-format)))
+
+(defun visual-line-mode-org--format-mode-line ()
+  "Render the original mode line using source columns inside tables."
+  (let ((buffer-invisibility-spec
+         (if (visual-line-mode-org--table) nil buffer-invisibility-spec)))
+    (unwind-protect
+        (progn
+          (visual-line-mode-org--reset-column-cache)
+          ;; Fully render deferred fields before restoring invisibility.
+          ;; Escape literal percent signs for the outer mode-line renderer.
+          (replace-regexp-in-string
+           "%" (lambda (match) (concat match match))
+           (format-mode-line (visual-line-mode-org--original-mode-line)) t t))
+      ;; Do not leak the absolute-column cache into ordinary navigation.
+      (visual-line-mode-org--reset-column-cache))))
+
+(defun visual-line-mode-org--install-mode-line ()
+  "Keep the existing mode line and scope column calculations to rendering."
+  (setq visual-line-mode-org--mode-line-state
+        (cons (local-variable-p 'mode-line-format) mode-line-format))
+  (when mode-line-format
+    (setq-local mode-line-format
+                (list visual-line-mode-org--mode-line-form))))
+
+(defun visual-line-mode-org--restore-mode-line ()
+  "Remove our wrapper without discarding subsequent layout changes."
+  (when visual-line-mode-org--mode-line-state
+    (if (equal mode-line-format (list visual-line-mode-org--mode-line-form))
+        (if (car visual-line-mode-org--mode-line-state)
+            (setq-local mode-line-format
+                        (cdr visual-line-mode-org--mode-line-state))
+          (kill-local-variable 'mode-line-format))
+      (let ((restored
+             (cl-subst (visual-line-mode-org--original-mode-line)
+                       visual-line-mode-org--mode-line-form mode-line-format
+                       :test #'equal)))
+        (unless (equal restored mode-line-format)
+          (setq-local mode-line-format restored))))
+    (setq visual-line-mode-org--mode-line-state nil)))
 
 (defun visual-line-mode-org--clear ()
   "Remove only overlays owned by this mode."
@@ -415,6 +470,7 @@ With N, move forward N - 1 lines first."
   "Remove hooks and restore display state."
   (setq visual-line-mode-org--navigation-origin nil)
   (visual-line-mode-org--restore-line-move)
+  (visual-line-mode-org--restore-mode-line)
   (remove-hook 'pre-command-hook #'visual-line-mode-org--pre-command t)
   (remove-hook 'post-command-hook #'visual-line-mode-org--post-command t)
   (remove-hook 'pre-redisplay-functions #'visual-line-mode-org--refresh t)
@@ -473,6 +529,7 @@ Experimental: intended for fixed-pitch text without other table overlays."
       (setq visual-line-mode-org--owned-invisibility-spec
             (copy-tree buffer-invisibility-spec))
       (when visual-line-mode-org--enabled-visual-line (visual-line-mode 1))
+      (visual-line-mode-org--install-mode-line)
       (add-hook 'pre-command-hook #'visual-line-mode-org--pre-command nil t)
       (add-hook 'post-command-hook #'visual-line-mode-org--post-command nil t)
       (add-hook 'pre-redisplay-functions #'visual-line-mode-org--refresh nil t)
