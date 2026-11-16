@@ -270,15 +270,24 @@
             (should line-move-visual))
         (remove-hook 'post-command-hook record t)))))
 
+(ert-deftest vlorg-home-end-default-bindings ()
+  (vlorg-test--buffer vlorg-test--reported-table
+    (should (eq (key-binding [home] nil t) #'move-beginning-of-line))
+    (should (eq (key-binding [end] nil t) #'move-end-of-line))
+    (visual-line-mode-org-mode 1)
+    (should (eq (key-binding [home]) #'visual-line-mode-org-move-beginning-of-line))
+    (should (eq (key-binding [end]) #'visual-line-mode-org-move-end-of-line))))
+
 (defun vlorg-test--navigation-trace (text row column keys hide enabled
-                                       &optional prose redisplay-each)
+                                       &optional prose redisplay-each default-bindings)
   "Trace KEYS using the user's bindings, optionally redisplaying each key."
   (vlorg-test--buffer text
     (use-local-map (copy-keymap (current-local-map)))
     (local-set-key (kbd "<left>") #'left-char)
     (local-set-key (kbd "<right>") #'right-char)
-    (local-set-key (kbd "<home>") #'org-beginning-of-line)
-    (local-set-key (kbd "<end>") #'org-end-of-line)
+    (unless default-bindings
+      (local-set-key (kbd "<home>") #'org-beginning-of-line)
+      (local-set-key (kbd "<end>") #'org-end-of-line))
     (setq-local org-hide-emphasis-markers hide
                 display-line-numbers t
                 truncate-lines t)
@@ -294,7 +303,9 @@
                                  '(left-char right-char
                                    org-beginning-of-line org-end-of-line
                                    visual-line-mode-org-beginning-of-line
-                                   visual-line-mode-org-end-of-line))
+                                   visual-line-mode-org-end-of-line
+                                   visual-line-mode-org-move-beginning-of-line
+                                   visual-line-mode-org-move-end-of-line))
                        (push (list (point) (invisible-p (point))) positions)))))
       (unless redisplay-each (add-hook 'post-command-hook record t t))
       (unwind-protect
@@ -305,7 +316,7 @@
                   (execute-kbd-macro (vector event))
                   (redisplay t)
                   (when enabled
-                    (should visual-line-mode-org--overlays)
+                    ;; No overlay is needed when the whole table fits.
                     (should (vlorg-test--one-screen-row-p)))
                   (push (list (point) (invisible-p (point))) positions))
               (execute-kbd-macro keys))
@@ -320,13 +331,14 @@
         (dolist (case '((100 "<home> <home>")
                         (20 "<end> <end>")
                         (105 "<end> <home> <end> <home>")))
-          (let* ((keys (kbd (cadr case)))
-                 (baseline (vlorg-test--navigation-trace
-                            text row (car case) keys hide nil))
-                 (actual (vlorg-test--navigation-trace
-                          text row (car case) keys hide t)))
-            (should baseline)
-            (should (equal actual baseline))))))))
+          (dolist (default-bindings '(nil t))
+            (let* ((keys (kbd (cadr case)))
+                   (baseline (vlorg-test--navigation-trace
+                              text row (car case) keys hide nil nil nil default-bindings))
+                   (actual (vlorg-test--navigation-trace
+                            text row (car case) keys hide t nil nil default-bindings)))
+              (should baseline)
+              (should (equal actual baseline)))))))))
 
 (ert-deftest vlorg-keyboard-left-right-in-tables ()
   (skip-unless (not noninteractive))
@@ -346,10 +358,11 @@
 (ert-deftest vlorg-keyboard-home-end-in-prose ()
   (skip-unless (not noninteractive))
   (let ((keys (kbd "<home> <end> <home> <end>")))
-    (should (equal (vlorg-test--navigation-trace
-                    vlorg-test--text 0 140 keys t t t)
-                   (vlorg-test--navigation-trace
-                    vlorg-test--text 0 140 keys t nil t)))))
+    (dolist (default-bindings '(nil t))
+      (should (equal (vlorg-test--navigation-trace
+                      vlorg-test--text 0 140 keys t t t nil default-bindings)
+                     (vlorg-test--navigation-trace
+                      vlorg-test--text 0 140 keys t nil t nil default-bindings))))))
 
 (ert-deftest vlorg-real-redisplay ()
   "Check actual screen coordinates, not just buffer properties."

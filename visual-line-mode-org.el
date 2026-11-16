@@ -1,6 +1,6 @@
 ;;; visual-line-mode-org.el --- Wrap prose, clip Org tables -*- lexical-binding: t; -*-
 
-;; Version: 0.1.2
+;; Version: 0.1.3
 ;; Package-Requires: ((emacs "30.1") (org "9.7"))
 ;; Keywords: convenience, outlines
 
@@ -203,6 +203,24 @@ With N, move forward N - 1 lines first."
                                (not (visual-line-mode-org--table)))))
     (org-end-of-line n)))
 
+(defun visual-line-mode-org-move-beginning-of-line (&optional n)
+  "Handle native beginning-of-line bindings without changing prose behavior."
+  (interactive "^p")
+  (if (visual-line-mode-org--table)
+      (visual-line-mode-org-beginning-of-line n)
+    (let ((visual-line-mode-org-mode nil))
+      (funcall (or (command-remapping #'move-beginning-of-line)
+                   #'move-beginning-of-line)
+               n))))
+
+(defun visual-line-mode-org-move-end-of-line (&optional n)
+  "Handle native end-of-line bindings without changing prose behavior."
+  (interactive "^p")
+  (if (visual-line-mode-org--table)
+      (visual-line-mode-org-end-of-line n)
+    (let ((visual-line-mode-org-mode nil))
+      (funcall (or (command-remapping #'move-end-of-line) #'move-end-of-line) n))))
+
 (defvar visual-line-mode-org-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c <right>") #'visual-line-mode-org-scroll-left)
@@ -215,6 +233,12 @@ With N, move forward N - 1 lines first."
             #'visual-line-mode-org-beginning-of-line)
 (define-key visual-line-mode-org-mode-map [remap org-end-of-line]
             #'visual-line-mode-org-end-of-line)
+;; Remapping is not recursive: the usual Home/End bindings name these
+;; commands, which Org itself remaps.  Handle the original commands too.
+(define-key visual-line-mode-org-mode-map [remap move-beginning-of-line]
+            #'visual-line-mode-org-move-beginning-of-line)
+(define-key visual-line-mode-org-mode-map [remap move-end-of-line]
+            #'visual-line-mode-org-move-end-of-line)
 
 (defun visual-line-mode-org--restore-line-move ()
   "Restore the navigation setting temporarily changed for a command."
