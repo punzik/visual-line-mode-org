@@ -1,6 +1,7 @@
 ;;; visual-line-mode-org-test.el --- Prototype tests -*- lexical-binding: t; -*-
 
 (require 'ert)
+(require 'isearch)
 (require 'visual-line-mode-org)
 
 (defmacro vlorg-test--buffer (text &rest body)
@@ -487,6 +488,128 @@
   (dolist (bindings '(wrapper native))
     (should (equal (vlorg-test--page-trace t bindings 0 t)
                    (vlorg-test--page-trace nil bindings 0 t)))))
+
+(defconst vlorg-test--boundary-text
+  (concat "*** Section\n"
+          "before-one " (make-string 220 ?a) "\n"
+          "before-two " (make-string 220 ?b) "\n"
+          "| first | " (make-string 220 ?x) " |\n"
+          "| last  | " (make-string 220 ?y) " |\n"
+          "after-one " (make-string 220 ?c) "\n"
+          "after-two " (make-string 220 ?d) "\n"))
+
+(defun vlorg-test--boundary-trace (text row column events &optional wrapper)
+  "Trace vertical EVENTS across table boundaries, optionally using WRAPPER pages."
+  (vlorg-test--buffer text
+    (use-local-map (copy-keymap (current-local-map)))
+    (local-set-key [down] #'next-line)
+    (local-set-key [up] #'previous-line)
+    (when wrapper
+      (with-suppressed-warnings ((interactive-only next-line previous-line))
+        (local-set-key [next] (lambda () (interactive) (next-line 35)))
+        (local-set-key [prior] (lambda () (interactive) (previous-line 35)))))
+    (setq-local display-line-numbers t org-hide-emphasis-markers t
+                scroll-preserve-screen-position t)
+    (org-indent-mode 1)
+    (font-lock-ensure)
+    (forward-line row)
+    (goto-char (min (+ (line-beginning-position) column) (line-end-position)))
+    (visual-line-mode-org-mode 1)
+    (set-window-start (selected-window)
+                      (save-excursion (beginning-of-line) (vertical-motion -10) (point)))
+    (redisplay t)
+    (let ((last-command nil)
+          (goal-column nil)
+          (temporary-goal-column 0)
+          (trace nil))
+      (dolist (event events)
+        (execute-kbd-macro (vector event))
+        (redisplay t)
+        (push (list :row (line-number-at-pos) :column (current-column)
+                    :table (and (visual-line-mode-org--table) t)
+                    :bol (bolp) :goal goal-column :temporary temporary-goal-column
+                    :visual-bol (= (point) (save-excursion (beginning-of-visual-line) (point))))
+              trace))
+      (nreverse trace))))
+
+(ert-deftest vlorg-boundary-resets-column-and-goal ()
+  (dolist (rows '((4 5) (2 3)))
+    (vlorg-test--buffer vlorg-test--boundary-text
+      (forward-line (car rows)) (forward-char 80)
+      (visual-line-mode-org-mode 1)
+      (let ((this-command 'next-line) (last-command-event 'down)
+            (goal-column 80) (temporary-goal-column 80))
+        (visual-line-mode-org--pre-command)
+        (goto-char (point-min)) (forward-line (cadr rows)) (forward-char 20)
+        (visual-line-mode-org--post-command)
+        (should (bolp))
+        (should-not goal-column)
+        (should (= temporary-goal-column 0))))))
+
+(ert-deftest vlorg-boundary-does-not-reset-mouse-or-search ()
+  (dolist (command '(mouse-set-point isearch-forward next-line))
+    (vlorg-test--buffer vlorg-test--boundary-text
+      (forward-line 4) (forward-char 80)
+      (visual-line-mode-org-mode 1)
+      (let ((this-command command)
+            (last-command-event (pcase command
+                                  ('mouse-set-point 'mouse-1)
+                                  ('next-line 'up)
+                                  (_ ?\C-s)))
+            (isearch-mode (eq command 'next-line))
+            (goal-column 80) (temporary-goal-column 80))
+        (visual-line-mode-org--pre-command)
+        (goto-char (point-min)) (forward-line 5) (forward-char 20)
+        (let ((target (point)))
+          (visual-line-mode-org--post-command)
+          (should (= (point) target))
+          (should (= goal-column 80))
+          (should (= temporary-goal-column 80)))))))
+
+(ert-deftest vlorg-keyboard-arrows-reset-at-boundaries ()
+  (skip-unless (not noninteractive))
+  (dolist (case '((4 120 (down down) nil)
+                  (3 120 (up up) nil)
+                  (2 999 (down down) t)
+                  (5 5 (up up) t)))
+    (let* ((trace (vlorg-test--boundary-trace vlorg-test--boundary-text
+                                            (nth 0 case) (nth 1 case) (nth 2 case)))
+           (first (car trace)) (second (cadr trace)))
+      (should (eq (plist-get first :table) (nth 3 case)))
+      (should (plist-get first :bol))
+      (should-not (plist-get first :goal))
+      (should (eql (plist-get first :temporary) 0))
+      (should (plist-get second :visual-bol))))
+  (let ((text (concat (make-string 220 ?a) "\n\n"
+                      "| " (make-string 220 ?x) " |\n"
+                      "| " (make-string 220 ?y) " |\n\n"
+                      (make-string 220 ?b) "\n")))
+    (dolist (case '((3 (down down)) (2 (up up))))
+      (let ((trace (vlorg-test--boundary-trace text (car case) 120 (cadr case))))
+        (should-not (plist-get (car trace) :table))
+        (should (plist-get (car trace) :bol))
+        (should (eql (plist-get (car trace) :temporary) 0))
+        (should (plist-get (cadr trace) :visual-bol))))))
+
+(ert-deftest vlorg-keyboard-pages-reset-at-boundaries ()
+  (skip-unless (not noninteractive))
+  (let* ((prose (concat "paragraph " (make-string 200 ?p) "\n"))
+         (text (concat (apply #'concat (make-list 40 prose))
+                       vlorg-test--large-table
+                       (apply #'concat (make-list 80 prose)))))
+    (dolist (wrapper '(nil t))
+      (dolist (case '((442 120 (next down) nil)
+                      (43 120 (prior up) nil)
+                      (34 20 (next down) t)
+                      (449 20 (prior up) t)))
+        (let* ((trace (vlorg-test--boundary-trace text (nth 0 case) (nth 1 case)
+                                                 (nth 2 case) wrapper))
+               (first (car trace)) (second (cadr trace)))
+          (should (eq (plist-get first :table) (nth 3 case)))
+          (should (plist-get first :bol))
+          (should-not (plist-get first :goal))
+          (should (eql (plist-get first :temporary) 0))
+          (should (plist-get second :visual-bol)))))))
 
 (ert-deftest vlorg-real-redisplay ()
   "Check actual screen coordinates, not just buffer properties."

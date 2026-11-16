@@ -1,6 +1,6 @@
 ;;; visual-line-mode-org.el --- Wrap prose, clip Org tables -*- lexical-binding: t; -*-
 
-;; Version: 0.1.5
+;; Version: 0.1.6
 ;; Package-Requires: ((emacs "30.1") (org "9.7"))
 ;; Keywords: convenience, outlines
 
@@ -28,6 +28,8 @@
 (defvar-local visual-line-mode-org--invisibility-state nil)
 (defvar-local visual-line-mode-org--owned-invisibility-spec nil)
 (defvar-local visual-line-mode-org--line-move-state nil)
+(defvar visual-line-mode-org--navigation-origin nil
+  "Buffer, window, text tick and table status before vertical navigation.")
 (defvar visual-line-mode-org--line-move-buffer nil
   "Buffer whose navigation setting is temporarily changed for a command.")
 (defvar visual-line-mode-org-mode)
@@ -297,9 +299,40 @@ With N, move forward N - 1 lines first."
   (setq visual-line-mode-org--line-move-buffer nil)
   (remove-hook 'post-command-hook #'visual-line-mode-org--restore-line-move))
 
+(defun visual-line-mode-org--vertical-command-p ()
+  "Whether this is vertical keyboard navigation, excluding active search."
+  (and (not (bound-and-true-p isearch-mode))
+       (or (memq this-command '(next-line previous-line
+                               scroll-up-command scroll-down-command
+                               visual-line-mode-org-scroll-up-command
+                               visual-line-mode-org-scroll-down-command))
+           ;; Page keys may call user-defined functions or anonymous lambdas.
+           (and last-command-event
+                (memq (event-basic-type last-command-event)
+                      '(up down prior next kp-up kp-down kp-prior kp-next))))))
+
+(defun visual-line-mode-org--reset-boundary-column ()
+  "Reset the column after vertical navigation across a table boundary."
+  (let ((origin visual-line-mode-org--navigation-origin))
+    (setq visual-line-mode-org--navigation-origin nil)
+    (when (and origin
+               (eq (nth 0 origin) (current-buffer))
+               (eq (nth 1 origin) (selected-window))
+               (= (nth 2 origin) (buffer-chars-modified-tick))
+               (not (eq (nth 3 origin)
+                        (and (visual-line-mode-org--table) t))))
+      (visual-line-mode-org--clear)
+      (beginning-of-line)
+      (setq goal-column nil
+            temporary-goal-column 0))))
+
 (defun visual-line-mode-org--pre-command ()
   "Let commands operate without this mode's clipping overlays."
   (visual-line-mode-org--restore-line-move)
+  (setq visual-line-mode-org--navigation-origin
+        (when (visual-line-mode-org--vertical-command-p)
+          (list (current-buffer) (selected-window) (buffer-chars-modified-tick)
+                (and (visual-line-mode-org--table) t))))
   ;; Page scrolling needs the clipped geometry, including when starting in
   ;; prose with a table elsewhere in the same window.
   (unless (memq this-command '(scroll-up-command scroll-down-command
@@ -322,10 +355,12 @@ With N, move forward N - 1 lines first."
   ;; Do not clip here: point adjustment runs after post-command hooks.
   ;; A hidden emphasis marker could merge with our hidden prefix and make
   ;; backward adjustment jump to the preceding row.  Clip at redisplay.
-  (visual-line-mode-org--restore-line-move))
+  (visual-line-mode-org--restore-line-move)
+  (visual-line-mode-org--reset-boundary-column))
 
 (defun visual-line-mode-org--disable ()
   "Remove hooks and restore display state."
+  (setq visual-line-mode-org--navigation-origin nil)
   (visual-line-mode-org--restore-line-move)
   (remove-hook 'pre-command-hook #'visual-line-mode-org--pre-command t)
   (remove-hook 'post-command-hook #'visual-line-mode-org--post-command t)
