@@ -364,6 +364,48 @@
                      (vlorg-test--navigation-trace
                       vlorg-test--text 0 140 keys t nil t nil default-bindings))))))
 
+(ert-deftest vlorg-keyboard-end-displays-closing-bar ()
+  (skip-unless (not noninteractive))
+  (vlorg-test--buffer (concat "*** Table\n" vlorg-test--reported-table)
+    (setq-local org-hide-emphasis-markers t
+                display-line-numbers t)
+    (org-indent-mode 1)
+    (font-lock-ensure)
+    (use-local-map (copy-keymap (current-local-map)))
+    (local-set-key [end] #'move-end-of-line)
+    (forward-line 3)
+    (visual-line-mode-org-mode 1)
+    (redisplay t)
+    (execute-kbd-macro [end])
+    (redisplay t)
+    (should (eolp))
+    (should (eq (char-before) ?|))
+    (should-not (invisible-p (1- (point))))
+    (let ((bar (posn-at-point (1- (point))))
+          (cursor (posn-at-point (point))))
+      (should bar)
+      (should cursor)
+      (should (= (cdr (posn-x-y bar)) (cdr (posn-x-y cursor))))
+      (should (< (car (posn-x-y bar)) (car (posn-x-y cursor)))))))
+
+(ert-deftest vlorg-end-keeps-closing-bar-visible ()
+  (vlorg-test--buffer (concat "*** Table\n" vlorg-test--reported-table)
+    (setq-local org-hide-emphasis-markers t
+                display-line-numbers t)
+    (org-indent-mode 1)
+    (font-lock-ensure)
+    (forward-line 3)
+    (end-of-line)
+    ;; Match the indentation prefix installed during interactive redisplay.
+    (put-text-property (line-beginning-position) (line-end-position)
+                       'line-prefix (make-string 6 ?\s))
+    (let ((end (point)))
+      (visual-line-mode-org-mode 1)
+      (should (= (point) end))
+      (should (eq (char-before) ?|))
+      (should-not (invisible-p (1- end)))
+      (should (vlorg-test--one-screen-row-p)))))
+
 (ert-deftest vlorg-real-redisplay ()
   "Check actual screen coordinates, not just buffer properties."
   (skip-unless (not noninteractive))

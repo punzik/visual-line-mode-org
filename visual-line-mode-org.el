@@ -1,6 +1,6 @@
 ;;; visual-line-mode-org.el --- Wrap prose, clip Org tables -*- lexical-binding: t; -*-
 
-;; Version: 0.1.3
+;; Version: 0.1.4
 ;; Package-Requires: ((emacs "30.1") (org "9.7"))
 ;; Keywords: convenience, outlines
 
@@ -76,14 +76,16 @@ Do not split a wide character or tab across the viewport edge."
     (backward-char))
   (min (point) end))
 
+(defun visual-line-mode-org--row-width (window width)
+  "Return usable WIDTH for the current row in WINDOW, excluding its prefix."
+  (let ((prefix (get-char-property (line-beginning-position) 'line-prefix window)))
+    (max 1 (- width (if (stringp prefix) (string-width prefix) 0)))))
+
 (defun visual-line-mode-org--row-span (window offset width)
   "Return visible bounds of this row at OFFSET and WIDTH in WINDOW."
-  (let* ((start (line-beginning-position))
-         (end (line-end-position))
+  (let* ((end (line-end-position))
          (left (visual-line-mode-org--column-position offset end))
-         (prefix (get-char-property start 'line-prefix window))
-         (available (max 1 (- width (if (stringp prefix)
-                                       (string-width prefix) 0))))
+         (available (visual-line-mode-org--row-width window width))
          ;; Measure from the new origin, particularly for tabs after scrolling.
          (motion (compute-motion left '(0 . 0) end (cons available 0)
                                  most-positive-fixnum nil window))
@@ -128,10 +130,12 @@ Do not split a wide character or tab across the viewport edge."
                 (setq offset 0))
               (when table
                 (goto-char cursor)
-                (let ((column (current-column)))
+                (let ((column (current-column))
+                      (available (visual-line-mode-org--row-width window width)))
+                  ;; Leave one column for the cursor, including at end of line.
                   (cond ((< column offset) (setq offset column))
-                        ((>= column (+ offset width))
-                         (setq offset (max 0 (- column width -1)))))))
+                        ((>= column (+ offset available))
+                         (setq offset (max 0 (- column available -1)))))))
               (when table
                 (goto-char cursor)
                 (let ((span (visual-line-mode-org--row-span window offset width)))
