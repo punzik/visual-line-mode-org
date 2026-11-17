@@ -1,14 +1,13 @@
-# visual-line-mode-org
+# visual-line-table-mode
 
 Wrap prose without wrapping Org or Markdown tables.
 
-`visual-line-mode-org-mode` is an experimental Emacs minor mode that keeps
+`visual-line-table-mode` is an experimental Emacs minor mode that keeps
 paragraphs wrapped to the window width while displaying each table row on a
 single screen line. Wide tables are clipped at the window edge; move through the
 table or use the scrolling keys below to reveal the remaining columns.
 
-It works in `org-mode`, `markdown-mode`, and `gfm-mode`. The mode name is
-unchanged for now.
+It works in `org-mode`, `markdown-mode`, and `gfm-mode`.
 
 Only the display changes. Your file is not reformatted, and no line breaks are
 inserted.
@@ -41,37 +40,37 @@ and terminal Emacs.
 
 ## Installation
 
-Download [`visual-line-mode-org.el`](visual-line-mode-org.el), or clone this
+Download [`visual-line-table-mode.el`](visual-line-table-mode.el), or clone this
 repository. Place the file in a directory on your Emacs `load-path`, for example:
 
 ```text
-~/.emacs.d/lisp/visual-line-mode-org/visual-line-mode-org.el
+~/.emacs.d/lisp/visual-line-table-mode/visual-line-table-mode.el
 ```
 
 Add this to your Emacs configuration:
 
 ```elisp
 (add-to-list 'load-path
-             (expand-file-name "~/.emacs.d/lisp/visual-line-mode-org/"))
-(require 'visual-line-mode-org)
+             (expand-file-name "~/.emacs.d/lisp/visual-line-table-mode/"))
+(require 'visual-line-table-mode)
 ```
 
 Restart Emacs or evaluate those forms. In an Org or Markdown buffer, run:
 
 ```text
-M-x visual-line-mode-org-mode
+M-x visual-line-table-mode
 ```
 
 To enable it automatically in Org buffers, also add:
 
 ```elisp
-(add-hook 'org-mode-hook #'visual-line-mode-org-mode)
+(add-hook 'org-mode-hook #'visual-line-table-mode)
 ```
 
 For Markdown (including `gfm-mode`, which also runs `markdown-mode-hook`):
 
 ```elisp
-(add-hook 'markdown-mode-hook #'visual-line-mode-org-mode)
+(add-hook 'markdown-mode-hook #'visual-line-table-mode)
 ```
 
 You do not need to enable `visual-line-mode` separately: this mode enables it
@@ -79,10 +78,10 @@ when necessary.
 
 ### Try it without changing your configuration
 
-1. Run `M-x load-file` and select `visual-line-mode-org.el`.
+1. Run `M-x load-file` and select `visual-line-table-mode.el`.
 2. Open an Org file, such as [`example.org`](example.org), or a Markdown file
    with pipe tables, such as [`example.md`](example.md).
-3. Run `M-x visual-line-mode-org-mode`.
+3. Run `M-x visual-line-table-mode`.
 
 Run the same command again to disable the mode. Any `visual-line-mode` setting
 that was already enabled remains enabled; otherwise, the previous display
@@ -146,7 +145,7 @@ widths. Your zero-based or one-based numbering preference is preserved.
 
 The existing mode-line layout is retained. Outside tables, normal column
 reporting is unchanged. If you replace your mode-line layout while this mode is
-active, toggle `visual-line-mode-org-mode` off and on to attach the new layout.
+active, toggle `visual-line-table-mode` off and on to attach the new layout.
 
 ## Markdown tables
 
@@ -197,7 +196,7 @@ open a separate table-editing window or modify the contents of your document.
 - **Large documents:** table views are rebuilt across the buffer after commands
   and edits. Performance has not yet been optimized for very large files.
 
-If the display looks wrong, disable `visual-line-mode-org-mode` to return to the
+If the display looks wrong, disable `visual-line-table-mode` to return to the
 previous display settings. When reporting a problem, include your Emacs and Org
 versions (and Markdown mode version when applicable), relevant modes and
 keybindings, and a small example table.
@@ -207,7 +206,7 @@ keybindings, and a small example table.
 Run the ERT suite from the repository root:
 
 ```sh
-emacs -Q --batch -L . -l test/visual-line-mode-org-test.el \
+emacs -Q --batch -L . -l test/visual-line-table-mode-test.el \
   -f ert-run-tests-batch-and-exit
 ```
 

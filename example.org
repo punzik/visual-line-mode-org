@@ -1,4 +1,4 @@
-#+title: Trying visual-line-mode-org
+#+title: Trying visual-line-table-mode
 
 * Ordinary text
 
