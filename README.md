@@ -76,6 +76,21 @@ For Markdown (including `gfm-mode`, which also runs `markdown-mode-hook`):
 You do not need to enable `visual-line-mode` separately: this mode enables it
 when necessary.
 
+### use-package
+
+If the package is already on your `load-path` (for example, through Nix), enable
+it automatically in Org buffers with:
+
+```elisp
+(use-package visual-line-table-mode
+  :hook (org-mode . visual-line-table-mode))
+```
+
+This replaces the explicit `require` and `add-hook` forms above. There is no
+need to enable `visual-line-mode` separately. When installing through Nix, do
+not add `:ensure t`; if you globally enable `use-package-always-ensure`, add
+`:ensure nil` to this declaration.
+
 ### Try it without changing your configuration
 
 1. Run `M-x load-file` and select `visual-line-table-mode.el`.
@@ -86,6 +101,75 @@ when necessary.
 Run the same command again to disable the mode. Any `visual-line-mode` setting
 that was already enabled remains enabled; otherwise, the previous display
 settings are restored.
+
+### Nix
+
+[`package.nix`](package.nix) builds the package with Nixpkgs' Emacs builder,
+using a pinned GitHub commit and a fixed source hash. No flakes are required.
+It does not install Emacs or modify your configuration by itself.
+
+From a checkout of this repository, build the Lisp package with:
+
+```sh
+nix-build -E 'let pkgs = import <nixpkgs> {}; in pkgs.emacsPackages.callPackage ./package.nix {}'
+```
+
+To build an Emacs with the package on its load path, save this as `emacs.nix`
+next to `package.nix` and run `nix-build emacs.nix`:
+
+```nix
+let
+  pkgs = import <nixpkgs> {};
+in
+pkgs.emacsPackages.emacsWithPackages (epkgs: [
+  (epkgs.callPackage ./package.nix {})
+  # epkgs.markdown-mode # Optional, for Markdown buffers.
+])
+```
+
+Start it with `./result/bin/emacs`. Emacs must be version 30.1 or newer.
+Use `epkgs.callPackage`, not the top-level `pkgs.callPackage`: the expression
+needs the Emacs package set's `trivialBuild` builder. `markdown-mode` is not
+pulled in automatically; add it when needed.
+
+For **NixOS**, place `package.nix` alongside the configuration module:
+
+```nix
+{ pkgs, ... }:
+{
+  environment.systemPackages = [
+    (pkgs.emacsPackages.emacsWithPackages (epkgs: [
+      (epkgs.callPackage ./package.nix {})
+      # epkgs.markdown-mode
+    ]))
+  ];
+}
+```
+
+For **Home Manager**, place `package.nix` alongside the home configuration:
+
+```nix
+{
+  programs.emacs = {
+    enable = true;
+    extraPackages = epkgs: [
+      (epkgs.callPackage ./package.nix {})
+      # epkgs.markdown-mode
+    ];
+    extraConfig = ''
+      (require 'visual-line-table-mode)
+      (add-hook 'org-mode-hook #'visual-line-table-mode)
+      (add-hook 'markdown-mode-hook #'visual-line-table-mode)
+    '';
+  };
+}
+```
+
+After rebuilding NixOS or Home Manager, restart Emacs. For the standalone and
+NixOS examples, add the `require` and desired hooks from the installation
+instructions above to your Emacs configuration; no manual `load-path` entry is
+needed. To update the packaged source, change `src.rev` and `src.hash` together
+in `package.nix`.
 
 ## Scrolling wide tables
 
