@@ -1,4 +1,4 @@
-;;; visual-line-mode-org.el --- Wrap prose, clip Org tables -*- lexical-binding: t; -*-
+;;; visual-line-mode-org.el --- Wrap prose, clip Org and Markdown tables -*- lexical-binding: t; -*-
 
 ;; Version: 0.1.8
 ;; Package-Requires: ((emacs "30.1") (org "9.7"))
@@ -16,12 +16,23 @@
 (require 'org)
 (require 'org-element)
 (require 'cl-lib)
+(require 'subr-x)
+
+(declare-function markdown-code-block-at-point-p "markdown-mode" (&optional pos))
+(declare-function markdown-beginning-of-line "markdown-mode" (&optional n))
+(declare-function markdown-end-of-line "markdown-mode" (&optional n))
+(defvar markdown-regex-header-atx)
+(defvar markdown-regex-list)
+(defvar markdown-regex-blockquote)
+(defvar markdown-regex-hr)
 
 (defgroup visual-line-mode-org nil
-  "Wrap prose and clip tables in Org buffers."
+  "Wrap prose and clip tables in Org and Markdown buffers."
   :group 'org-appearance)
 
 (defvar-local visual-line-mode-org--overlays nil)
+(defvar-local visual-line-mode-org--markdown-cache nil)
+(defvar-local visual-line-mode-org--markdown-tick nil)
 (defvar-local visual-line-mode-org--windows nil)
 (defvar-local visual-line-mode-org--enabled-visual-line nil)
 (defvar-local visual-line-mode-org--updating nil)
@@ -109,15 +120,119 @@
         (set-window-hscroll window 0)
         state)))
 
+(defun visual-line-mode-org--markdown-cells ()
+  "Return this row's trimmed cells, or nil if it has no unquoted pipes.
+Escaped characters and matched backtick code spans cannot delimit cells."
+  (let* ((text (buffer-substring-no-properties
+                (line-beginning-position) (line-end-position)))
+         (length (length text)) (position 0) (start 0) cells)
+    (while (< position length)
+      (pcase (aref text position)
+        (?\\ (setq position (min length (+ position 2))))
+        (?`
+         (let* ((end (progn (string-match "`+" text position) (match-end 0)))
+                (size (- end position)) (search end) close)
+           (while (and (not close) (string-match "`+" text search))
+             (setq search (match-end 0))
+             (when (= (- search (match-beginning 0)) size)
+               (setq close search)))
+           (setq position (or close end))))
+        (?|
+         (push (string-trim (substring text start position)) cells)
+         (setq position (1+ position) start position))
+        (_ (setq position (1+ position)))))
+    (when cells
+      (push (string-trim (substring text start)) cells)
+      (setq cells (nreverse cells))
+      (when (equal (car cells) "") (setq cells (cdr cells)))
+      (when (equal (car (last cells)) "") (setq cells (butlast cells)))
+      cells)))
+
+(defconst visual-line-mode-org--markdown-fence-regexp
+  "^ \\{0,3\\}\\(`\\{3,\\}\\|~\\{3,\\}\\)\\(.*\\)$"
+  "A possible Markdown code fence, with fence and info string groups.")
+
+(defun visual-line-mode-org--markdown-skip-fence ()
+  "If this line opens a code fence, skip its block and return non-nil.
+Handle unclosed fences too: markdown-mode may only mark their opener."
+  (when (and (looking-at visual-line-mode-org--markdown-fence-regexp)
+             (or (eq (char-after (match-beginning 1)) ?~)
+                 (not (string-search "`" (match-string 2)))))
+    (let* ((fence (match-string 1))
+           (close (format "^ \\{0,3\\}%c\\{%d,\\}[ \t]*$"
+                          (aref fence 0) (length fence))))
+      (forward-line 1)
+      (if (re-search-forward close nil t)
+          (forward-line 1)
+        (goto-char (point-max))))
+    t))
+
+(defun visual-line-mode-org--markdown-row (&optional body)
+  "Return cells at point outside Markdown code blocks, or nil.
+With BODY, allow a single cell without pipes, but stop at block boundaries."
+  (unless (or (looking-at visual-line-mode-org--markdown-fence-regexp)
+              (markdown-code-block-at-point-p)
+              (looking-at-p "^[ \t]*$")
+              (looking-at-p markdown-regex-header-atx)
+              (looking-at-p markdown-regex-list)
+              (looking-at-p markdown-regex-blockquote)
+              (looking-at-p markdown-regex-hr)
+              (looking-at-p "^ \\{0,3\\}<[/!a-zA-Z?]"))
+    (or (visual-line-mode-org--markdown-cells)
+        (when body
+          (list (string-trim (buffer-substring-no-properties
+                              (line-beginning-position) (line-end-position))))))))
+
+(defun visual-line-mode-org--markdown-tables ()
+  "Return cached Markdown table bounds, rebuilding after text edits.
+A table needs a header and a matching delimiter row.  Body rows may
+have fewer or more cells, as in GFM.  Bounds exclude the following line."
+  (unless (eql visual-line-mode-org--markdown-tick (buffer-chars-modified-tick))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (save-match-data
+          ;; markdown-mode records fenced and indented code during this pass.
+          (syntax-propertize (point-max))
+          (goto-char (point-min))
+          (let (previous previous-start tables)
+            (while (not (eobp))
+              (if (visual-line-mode-org--markdown-skip-fence)
+                  (setq previous nil previous-start nil)
+                (let ((cells (visual-line-mode-org--markdown-row)))
+                  (if (and previous cells (= (length previous) (length cells))
+                           (cl-every (lambda (cell)
+                                       (string-match-p "\\`:?-\\{3,\\}:?\\'" cell))
+                                     cells))
+                      (let ((start previous-start))
+                        (forward-line 1)
+                        (while (and (not (eobp)) (visual-line-mode-org--markdown-row t))
+                          (forward-line 1))
+                        (push (cons start (point)) tables)
+                        (setq previous nil previous-start nil))
+                    (setq previous cells previous-start (point))
+                    (forward-line 1)))))
+            (setq visual-line-mode-org--markdown-cache (nreverse tables)
+                  visual-line-mode-org--markdown-tick (buffer-chars-modified-tick)))))))
+  visual-line-mode-org--markdown-cache)
+
 (defun visual-line-mode-org--table ()
-  "Return bounds of the Org table at point, or nil.
-Table-looking lines in source and example blocks are not tables."
-  (when (org-at-table-p)
-    (let ((table (org-element-lineage (org-element-context) '(table) t)))
-      (when (and table
-                 (eq (org-element-property :type table) 'org))
-        (cons (org-element-property :begin table)
-              (org-element-property :end table))))))
+  "Return bounds of the Org or Markdown table at point, or nil.
+Table-looking lines in code blocks are not tables."
+  (if (derived-mode-p 'markdown-mode)
+      (let ((position (point)))
+        (cl-find-if (lambda (bounds)
+                      (and (<= (car bounds) position)
+                           (or (< position (cdr bounds))
+                               (and (= position (cdr bounds) (point-max))
+                                    (not (bolp))))))
+                    (visual-line-mode-org--markdown-tables)))
+    (when (org-at-table-p)
+      (let ((table (org-element-lineage (org-element-context) '(table) t)))
+        (when (and table
+                   (eq (org-element-property :type table) 'org))
+          (cons (org-element-property :begin table)
+                (org-element-property :end table)))))))
 
 (defun visual-line-mode-org--overlay (start end window)
   "Create an owned overlay from START to END in WINDOW."
@@ -253,7 +368,8 @@ Do not split a wide character or tab across the viewport edge."
                     (setq offset (current-column)))))
               (setf (plist-get state :offset) offset)
               (goto-char (point-min))
-              (while (re-search-forward org-table-line-regexp nil t)
+              (while (re-search-forward (if (derived-mode-p 'markdown-mode)
+                                           "^." org-table-line-regexp) nil t)
                 (beginning-of-line)
                 (let ((bounds (visual-line-mode-org--table)))
                   (when bounds
@@ -282,7 +398,7 @@ This moves point into the viewport so automatic following does not undo it."
   (unless visual-line-mode-org-mode
     (user-error "Enable visual-line-mode-org-mode first"))
   (unless (visual-line-mode-org--table)
-    (user-error "Point is not in an Org table"))
+    (user-error "Point is not in a table"))
   (visual-line-mode-org--refresh)
   (let* ((window (selected-window))
          (state (visual-line-mode-org--state window))
@@ -304,20 +420,24 @@ This moves point into the viewport so automatic following does not undo it."
         (max 1 (/ (visual-line-mode-org--width (selected-window)) 2))))))
 
 (defun visual-line-mode-org-beginning-of-line (&optional n)
-  "Run `org-beginning-of-line', using logical lines inside tables.
+  "Run the major mode's beginning-of-line, using logical lines in tables.
 With N, move forward N - 1 lines first."
   (interactive "^p")
   (let ((visual-line-mode (and visual-line-mode
                                (not (visual-line-mode-org--table)))))
-    (org-beginning-of-line n)))
+    (if (derived-mode-p 'markdown-mode)
+        (markdown-beginning-of-line n)
+      (org-beginning-of-line n))))
 
 (defun visual-line-mode-org-end-of-line (&optional n)
-  "Run `org-end-of-line', using logical lines inside tables.
+  "Run the major mode's end-of-line, using logical lines in tables.
 With N, move forward N - 1 lines first."
   (interactive "^p")
   (let ((visual-line-mode (and visual-line-mode
                                (not (visual-line-mode-org--table)))))
-    (org-end-of-line n)))
+    (if (derived-mode-p 'markdown-mode)
+        (markdown-end-of-line n)
+      (org-end-of-line n))))
 
 (defun visual-line-mode-org-move-beginning-of-line (&optional n)
   "Handle native beginning-of-line bindings without changing prose behavior."
@@ -383,6 +503,10 @@ With N, move forward N - 1 lines first."
 (define-key visual-line-mode-org-mode-map [remap org-beginning-of-line]
             #'visual-line-mode-org-beginning-of-line)
 (define-key visual-line-mode-org-mode-map [remap org-end-of-line]
+            #'visual-line-mode-org-end-of-line)
+(define-key visual-line-mode-org-mode-map [remap markdown-beginning-of-line]
+            #'visual-line-mode-org-beginning-of-line)
+(define-key visual-line-mode-org-mode-map [remap markdown-end-of-line]
             #'visual-line-mode-org-end-of-line)
 ;; Remapping is not recursive: the usual Home/End bindings name these
 ;; commands, which Org itself remaps.  Handle the original commands too.
@@ -486,7 +610,9 @@ With N, move forward N - 1 lines first."
                           (eq (window-buffer window) (current-buffer)))
                  (set-window-hscroll window (plist-get state :hscroll))))
              visual-line-mode-org--windows))
-  (setq visual-line-mode-org--windows nil)
+  (setq visual-line-mode-org--windows nil
+        visual-line-mode-org--markdown-cache nil
+        visual-line-mode-org--markdown-tick nil)
   (when visual-line-mode-org--invisibility-state
     (if (equal buffer-invisibility-spec
                visual-line-mode-org--owned-invisibility-spec)
@@ -507,7 +633,7 @@ With N, move forward N - 1 lines first."
 
 ;;;###autoload
 (define-minor-mode visual-line-mode-org-mode
-  "Wrap prose while displaying Org table rows in a clipped viewport.
+  "Wrap prose while displaying Org or Markdown tables in a clipped viewport.
 Use \\[visual-line-mode-org-scroll-left] and
 \\[visual-line-mode-org-scroll-right] to scroll tables, not native hscroll.
 Experimental: intended for fixed-pitch text without other table overlays."
@@ -516,9 +642,9 @@ Experimental: intended for fixed-pitch text without other table overlays."
   :group 'visual-line-mode-org
   (if (not visual-line-mode-org-mode)
       (visual-line-mode-org--disable)
-    (unless (derived-mode-p 'org-mode)
+    (unless (derived-mode-p 'org-mode 'markdown-mode)
       (setq visual-line-mode-org-mode nil)
-      (user-error "This mode requires an Org buffer"))
+      (user-error "This mode requires an Org or Markdown buffer"))
     (unless visual-line-mode-org--windows
       (setq visual-line-mode-org--windows (make-hash-table :test #'eq)
             visual-line-mode-org--enabled-visual-line (not visual-line-mode))

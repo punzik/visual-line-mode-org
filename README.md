@@ -1,19 +1,22 @@
 # visual-line-mode-org
 
-Wrap prose without wrapping Org tables.
+Wrap prose without wrapping Org or Markdown tables.
 
 `visual-line-mode-org-mode` is an experimental Emacs minor mode that keeps
-paragraphs wrapped to the window width while displaying each Org table row on a
+paragraphs wrapped to the window width while displaying each table row on a
 single screen line. Wide tables are clipped at the window edge; move through the
 table or use the scrolling keys below to reveal the remaining columns.
+
+It works in `org-mode`, `markdown-mode`, and `gfm-mode`. The mode name is
+unchanged for now.
 
 Only the display changes. Your file is not reformatted, and no line breaks are
 inserted.
 
 ## Project goals
 
-- Make prose and wide tables comfortable to read in the same Org buffer.
-- Work with existing Emacs and Org installations, without patching either.
+- Make prose and wide tables comfortable to read in the same Org or Markdown buffer.
+- Work with existing Emacs major modes, without patching them.
 - Keep document contents unchanged, including when viewing read-only buffers.
 - Update the table view as you edit or resize a window, with independent views
   when the same buffer is shown in multiple windows.
@@ -26,10 +29,13 @@ inserted.
 ## Requirements
 
 - Emacs **30.1 or newer**.
-- Org **9.7 or newer**.
+- Org **9.7 or newer** (bundled with supported Emacs versions).
+- [`markdown-mode`](https://github.com/jrblevin/markdown-mode) for Markdown
+  buffers; it is not needed when using this package only with Org.
 - A **monospaced font** for table text.
 
-Tested with Emacs 30.2 and Org 9.8.8 in both graphical and terminal Emacs.
+Tested with Emacs 30.2, Org 9.8.8, and Markdown mode 2.9-alpha in both graphical
+and terminal Emacs.
 `org-pretty-table-mode` is optional; compatibility has been tested with version
 1.0.0 and its standard single- and double-line borders.
 
@@ -50,7 +56,7 @@ Add this to your Emacs configuration:
 (require 'visual-line-mode-org)
 ```
 
-Restart Emacs or evaluate those forms. In an Org buffer, run:
+Restart Emacs or evaluate those forms. In an Org or Markdown buffer, run:
 
 ```text
 M-x visual-line-mode-org-mode
@@ -62,13 +68,20 @@ To enable it automatically in Org buffers, also add:
 (add-hook 'org-mode-hook #'visual-line-mode-org-mode)
 ```
 
+For Markdown (including `gfm-mode`, which also runs `markdown-mode-hook`):
+
+```elisp
+(add-hook 'markdown-mode-hook #'visual-line-mode-org-mode)
+```
+
 You do not need to enable `visual-line-mode` separately: this mode enables it
 when necessary.
 
 ### Try it without changing your configuration
 
 1. Run `M-x load-file` and select `visual-line-mode-org.el`.
-2. Open an Org file, such as the included [`example.org`](example.org).
+2. Open an Org file, such as [`example.org`](example.org), or a Markdown file
+   with pipe tables, such as [`example.md`](example.md).
 3. Run `M-x visual-line-mode-org-mode`.
 
 Run the same command again to disable the mode. Any `visual-line-mode` setting
@@ -100,7 +113,7 @@ prose.
 
 ## Keyboard navigation
 
-With standard Org bindings, no additional key configuration is needed:
+With standard Org or Markdown bindings, no additional key configuration is needed:
 
 | Keys | Inside a table |
 | --- | --- |
@@ -112,7 +125,7 @@ Custom PageUp/PageDown commands that call `next-line` or `previous-line` with a
 line count are also supported: inside tables they count actual table rows,
 not wrapped screen lines.
 
-Outside tables, normal Org and Visual Line navigation is retained, with one
+Outside tables, normal major-mode and Visual Line navigation is retained, with one
 intentional boundary rule:
 
 > When Up/Down or PageUp/PageDown moves between a table and ordinary text, the
@@ -135,6 +148,30 @@ The existing mode-line layout is retained. Outside tables, normal column
 reporting is unchanged. If you replace your mode-line layout while this mode is
 active, toggle `visual-line-mode-org-mode` off and on to attach the new layout.
 
+## Markdown tables
+
+Both `markdown-mode` and `gfm-mode` support pipe tables with or without outer
+pipes:
+
+```markdown
+Name | Description
+:--- | ---:
+one  | A wide cell
+```
+
+A table must have a header and a delimiter row with the same number of cells.
+Each delimiter cell contains at least three dashes, optionally surrounded by
+alignment colons. Escaped pipes (`\|`) and pipes inside matched backtick code
+spans are not cell separators. Body rows may have missing or extra cells,
+including a single cell without pipes. A blank line or a new block, such as a
+heading, list, or code fence, ends the table.
+
+Fenced code blocks (including unclosed fences) and indented code blocks are not
+tables. Tables nested inside lists or blockquotes, HTML tables, grid tables, and
+third-party Markdown table renderers are not supported. The package does not
+change Markdown's table-editing commands; recognition here may be broader than
+that provided by the major mode.
+
 ## Compatibility and limitations
 
 This is an experimental package. It uses window-specific overlays to clip rows,
@@ -148,6 +185,9 @@ open a separate table-editing window or modify the contents of your document.
   single- and double-line monospaced borders. Enable the modes in either order;
   disabling this mode leaves the pretty-table formatting intact. Neither
   `org-pretty-table` itself nor its original formatting properties are modified.
+- **Markdown display:** pipe tables use the same clipping and scrolling as Org
+  tables. Markdown-specific markup-hiding and table-rendering packages have not
+  been verified.
 - **Fonts and display changes:** proportional fonts, differently scaled text
   within a table, arbitrary display replacements, other table-rendering
   packages, and Org's shrunk columns are not supported.
@@ -159,7 +199,24 @@ open a separate table-editing window or modify the contents of your document.
 
 If the display looks wrong, disable `visual-line-mode-org-mode` to return to the
 previous display settings. When reporting a problem, include your Emacs and Org
-versions, relevant modes and keybindings, and a small example table.
+versions (and Markdown mode version when applicable), relevant modes and
+keybindings, and a small example table.
+
+## Tests
+
+Run the ERT suite from the repository root:
+
+```sh
+emacs -Q --batch -L . -l test/visual-line-mode-org-test.el \
+  -f ert-run-tests-batch-and-exit
+```
+
+With `-Q`, add `-L /path/to/markdown-mode` to include Markdown tests; otherwise
+those tests are skipped if the library is unavailable. Interactive keyboard,
+mode-line, and screen-coordinate tests are skipped in batch. To run them, load
+the package and test file in an interactive Emacs and use `M-x ert` with selector
+`t`. Page-navigation tests assume a sufficiently large frame (for example, a
+120-column, 50-row terminal).
 
 ## License
 

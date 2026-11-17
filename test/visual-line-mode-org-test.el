@@ -855,4 +855,316 @@
       (should (= (- (cdr (posn-x-y b)) (cdr (posn-x-y a)))
                  (frame-char-height))))))
 
+(declare-function markdown-mode "markdown-mode" ())
+(declare-function gfm-mode "markdown-mode" ())
+(declare-function markdown-beginning-of-line "markdown-mode" (&optional n))
+(declare-function markdown-end-of-line "markdown-mode" (&optional n))
+
+(defmacro vlorg-test--markdown-buffer (mode text &rest body)
+  "Run BODY with TEXT displayed in a Markdown buffer using MODE."
+  (declare (indent 2) (debug t))
+  `(progn
+     (skip-unless (require 'markdown-mode nil t))
+     (save-window-excursion
+       (with-temp-buffer
+         (funcall ,mode)
+         (insert ,text)
+         (goto-char (point-min))
+         (set-window-buffer (selected-window) (current-buffer))
+         (set-window-hscroll (selected-window) 0)
+         (set-window-start (selected-window) (point-min))
+         (unwind-protect
+             (progn ,@body)
+           (when visual-line-mode-org-mode (visual-line-mode-org-mode -1)))))))
+
+(defconst vlorg-test--markdown-text
+  (concat (apply #'concat (make-list 70 "prose ")) "\n\n"
+          "Name | Description\n:--- | ---:\n"
+          "one | " (make-string 220 ?x) "\n"
+          "two | " (make-string 220 ?y) "\n\nAfter.\n"))
+
+(ert-deftest vlorg-markdown-table-bounds ()
+  (dolist (mode '(markdown-mode gfm-mode))
+    (dolist (text '("| A | B |\n| --- | :---: |\n| x | y |\n"
+                    "A | B\n--- | ---:\nx | y\n"
+                    "  | A |\n  | --- |\n  | x |"
+                    "| A | B |\n--- | ---\nx | y | extra\n| short |\n"
+                    "a\\|b | `c|d`\n--- | ---\nx | y\n"
+                    "``a`|b`` | c\n--- | ---\nx | y\n"
+                    "`unmatched | b\n--- | ---\nx | y\n"
+                    "A | B\n--- | ---\nonly-one-cell\nx | y\n"))
+      (vlorg-test--markdown-buffer mode text
+        (let ((bounds (cons (point-min) (point-max))))
+          (while (not (eobp))
+            (should (equal (visual-line-mode-org--table) bounds))
+            (forward-line 1)))))))
+
+(ert-deftest vlorg-markdown-not-tables ()
+  (dolist (mode '(markdown-mode gfm-mode))
+    (dolist (text '("plain prose | with a pipe\n"
+                    "| A | B |\n| x | y |\n"
+                    "A | B\n--- | --\nx | y\n"
+                    "A | B\n--- | --- | ---\nx | y\n"
+                    "a\\|b\n--- | ---\nx | y\n"
+                    "`a|b`\n--- | ---\nx | y\n"
+                    "A | B\nnot a delimiter\nx | y\n"))
+      (vlorg-test--markdown-buffer mode text
+        (visual-line-mode-org-mode 1)
+        (should-not (visual-line-mode-org--markdown-tables))
+        (should-not visual-line-mode-org--overlays)))))
+
+(ert-deftest vlorg-markdown-ignores-code-blocks ()
+  (dolist (mode '(markdown-mode gfm-mode))
+    (dolist (text '("```markdown\nA | B\n--- | ---\nx | y\n```\n"
+                    "~~~\n| A | B |\n| --- | --- |\n| x | y |\n~~~\n"
+                    "    A | B\n    --- | ---\n    x | y\n"
+                    "```\nA | B\n--- | ---\nx | y\n"
+                    "~~~~\nA | B\n--- | ---\nx | y\n~~~\nstill | code\n"
+                    "````\nA | B\n--- | ---\nx | y\n```\n"))
+      (vlorg-test--markdown-buffer mode text
+        (visual-line-mode-org-mode 1)
+        (while (not (eobp))
+          (should-not (visual-line-mode-org--table))
+          (forward-line 1))
+        (should-not visual-line-mode-org--overlays)))))
+
+(ert-deftest vlorg-markdown-cells ()
+  (vlorg-test--markdown-buffer #'markdown-mode
+      "| a\\|b | `c|d` | ``e`|f`` | g\\\\ | h |\n"
+    (should (equal (visual-line-mode-org--markdown-cells)
+                   '("a\\|b" "`c|d`" "``e`|f``" "g\\\\" "h")))))
+
+(ert-deftest vlorg-markdown-wrap-scroll-and-follow ()
+  (dolist (mode '(markdown-mode gfm-mode))
+    (vlorg-test--markdown-buffer mode vlorg-test--markdown-text
+      (visual-line-mode-org-mode 1)
+      (should-not (vlorg-test--one-screen-row-p))
+      (forward-line 4)
+      (should (vlorg-test--one-screen-row-p))
+      (visual-line-mode-org-scroll-left 100)
+      (should (= (plist-get (visual-line-mode-org--state (selected-window)) :offset) 100))
+      (should (= (let ((buffer-invisibility-spec nil)) (current-column)) 100))
+      (should (vlorg-test--one-screen-row-p))
+      (visual-line-mode-org-scroll-right 50)
+      (should (= (plist-get (visual-line-mode-org--state (selected-window)) :offset) 50))
+      (visual-line-mode-org--clear)
+      (end-of-line)
+      (visual-line-mode-org--refresh)
+      (should-not (invisible-p (1- (point))))
+      (should (vlorg-test--one-screen-row-p))
+      (goto-char (point-min))
+      (visual-line-mode-org--refresh)
+      (should (= (plist-get (visual-line-mode-org--state (selected-window)) :offset) 0))
+      (should-not (vlorg-test--one-screen-row-p))
+      (should (= (window-hscroll) 0)))))
+
+(ert-deftest vlorg-markdown-updates-after-edit ()
+  (vlorg-test--markdown-buffer #'markdown-mode
+      (concat "A | B\nnot a delimiter\nx | " (make-string 220 ?x) "\n")
+    (visual-line-mode-org-mode 1)
+    (should-not visual-line-mode-org--overlays)
+    (forward-line 1)
+    (delete-region (point) (line-end-position))
+    (insert "--- | ---")
+    (should visual-line-mode-org--overlays)
+    (should (visual-line-mode-org--table))
+    (beginning-of-line)
+    (delete-char 1)
+    (should-not (visual-line-mode-org--table))
+    (should-not visual-line-mode-org--overlays)))
+
+(ert-deftest vlorg-markdown-updates-code-context ()
+  (vlorg-test--markdown-buffer #'gfm-mode
+      (concat "A | B\n--- | ---\nx | " (make-string 220 ?x) "\n")
+    (visual-line-mode-org-mode 1)
+    (should visual-line-mode-org--overlays)
+    (insert "```\n")
+    (should-not visual-line-mode-org--overlays)
+    (should-not (visual-line-mode-org--markdown-tables))
+    (delete-region (point-min) (+ (point-min) 4))
+    (should visual-line-mode-org--overlays)))
+
+(ert-deftest vlorg-markdown-independent-tables-and-windows ()
+  (vlorg-test--markdown-buffer #'markdown-mode
+      (concat vlorg-test--markdown-text "\n" vlorg-test--markdown-text)
+    (delete-other-windows)
+    (forward-line 4)
+    (let ((second (split-window-right 30)))
+      (set-window-point second (+ (line-beginning-position) 180))
+      (visual-line-mode-org-mode 1)
+      (should (= (plist-get (visual-line-mode-org--state (selected-window)) :offset) 0))
+      (should (> (plist-get (visual-line-mode-org--state second) :offset) 0))
+      (visual-line-mode-org-scroll-left 100)
+      (should (= (plist-get (visual-line-mode-org--state (selected-window)) :offset) 100))
+      (dolist (window (list (selected-window) second))
+        (with-selected-window window
+          (should (vlorg-test--one-screen-row-p))))
+      (save-excursion
+        (goto-char (point-max)) (forward-line -4)
+        (should (visual-line-mode-org--table))
+        (should-not (invisible-p (line-beginning-position))))
+      (window-resize (selected-window) 5 t)
+      (visual-line-mode-org--refresh)
+      (dolist (window (list (selected-window) second))
+        (with-selected-window window
+          (should (vlorg-test--one-screen-row-p)))))))
+
+(ert-deftest vlorg-markdown-restores-settings-and-read-only-buffer ()
+  (dolist (mode '(markdown-mode gfm-mode))
+    (vlorg-test--markdown-buffer mode vlorg-test--markdown-text
+      (setq-local truncate-lines t word-wrap nil)
+      (setq buffer-read-only t)
+      (set-buffer-modified-p nil)
+      (let ((original (buffer-string)) (undo buffer-undo-list)
+            (tick (buffer-chars-modified-tick))
+            (format mode-line-format) (spec (copy-tree buffer-invisibility-spec)))
+        (visual-line-mode-org-mode 1)
+        (should visual-line-mode-org--overlays)
+        (visual-line-mode-org-mode -1)
+        (should truncate-lines)
+        (should-not word-wrap)
+        (should-not visual-line-mode)
+        (should-not visual-line-mode-org--overlays)
+        (should-not visual-line-mode-org--markdown-cache)
+        (should (equal mode-line-format format))
+        (should (equal buffer-invisibility-spec spec))
+        (should (equal original (buffer-string)))
+        (should (equal undo buffer-undo-list))
+        (should (= tick (buffer-chars-modified-tick)))
+        (should-not (buffer-modified-p))))))
+
+(ert-deftest vlorg-markdown-home-end-and-prose ()
+  (dolist (mode '(markdown-mode gfm-mode))
+    (vlorg-test--markdown-buffer mode vlorg-test--markdown-text
+      (visual-line-mode-org-mode 1)
+      (should (eq (command-remapping #'markdown-beginning-of-line)
+                  #'visual-line-mode-org-beginning-of-line))
+      (should (eq (command-remapping #'markdown-end-of-line)
+                  #'visual-line-mode-org-end-of-line))
+      (forward-line 4)
+      (visual-line-mode-org--clear)
+      (move-to-column 100)
+      (visual-line-mode-org-move-end-of-line)
+      (should (eolp))
+      (visual-line-mode-org-move-beginning-of-line)
+      (should (bolp))
+      ;; Outside tables, compare with the major mode and Visual Line directly.
+      (goto-char (point-min)) (forward-char 120)
+      (let ((expected (save-excursion (markdown-beginning-of-line) (point))))
+        (visual-line-mode-org-move-beginning-of-line)
+        (should (= (point) expected)))
+      (let ((expected (save-excursion (markdown-end-of-line) (point))))
+        (visual-line-mode-org-move-end-of-line)
+        (should (= (point) expected))))))
+
+(ert-deftest vlorg-markdown-navigation-and-boundary ()
+  (vlorg-test--markdown-buffer #'gfm-mode vlorg-test--markdown-text
+    (forward-line 4) (forward-char 100)
+    (visual-line-mode-org-mode 1)
+    (let ((this-command 'next-line) (last-command-event 'down)
+          (goal-column 100) (temporary-goal-column 100))
+      (visual-line-mode-org--pre-command)
+      (should-not line-move-visual)
+      (with-suppressed-warnings ((interactive-only next-line)) (next-line 1))
+      (visual-line-mode-org--post-command)
+      (should (= (current-column) 100))
+      (should line-move-visual)
+      (visual-line-mode-org--pre-command)
+      (with-suppressed-warnings ((interactive-only next-line)) (next-line 1))
+      (visual-line-mode-org--post-command)
+      (should (bolp))
+      (should-not goal-column)
+      (should (= temporary-goal-column 0)))))
+
+(ert-deftest vlorg-markdown-table-at-end-of-file ()
+  (dolist (mode '(markdown-mode gfm-mode))
+    (vlorg-test--markdown-buffer mode
+        (concat "A | B\n--- | ---\nx | " (make-string 220 ?x))
+      (goto-char (point-max))
+      (visual-line-mode-org-mode 1)
+      (should (visual-line-mode-org--table))
+      (should (> (plist-get (visual-line-mode-org--state (selected-window)) :offset) 0))
+      (should-not (invisible-p (1- (point))))
+      (should (vlorg-test--one-screen-row-p))
+      (visual-line-mode-org-scroll-right 20)
+      (should (visual-line-mode-org--table)))))
+
+(ert-deftest vlorg-markdown-single-cell-body-clips ()
+  (vlorg-test--markdown-buffer #'gfm-mode
+      (concat "A | B\n--- | ---\n" (make-string 220 ?x) "\nx | y\n\nAfter\n")
+    (visual-line-mode-org-mode 1)
+    (forward-line 2)
+    (should (visual-line-mode-org--table))
+    (should (vlorg-test--one-screen-row-p))
+    (visual-line-mode-org-scroll-left 100)
+    (should (vlorg-test--one-screen-row-p))
+    (forward-line 1)
+    (should (visual-line-mode-org--table))
+    (forward-line 1)
+    (should-not (visual-line-mode-org--table))))
+
+(ert-deftest vlorg-markdown-body-stops-at-block-boundaries ()
+  (dolist (following '("\n" "# Heading\n" "- list item\n" "> quote\n"
+                       "***\n" "<div>\n" "```\ncode\n```\n"))
+    (vlorg-test--markdown-buffer #'gfm-mode
+        (concat "A | B\n--- | ---\nx | y\n" following)
+      (let ((end (save-excursion (forward-line 3) (point))))
+        (should (equal (visual-line-mode-org--table) (cons (point-min) end)))
+        (goto-char end)
+        (should-not (visual-line-mode-org--table))))))
+
+(ert-deftest vlorg-markdown-keyboard-pages ()
+  (skip-unless (not noninteractive))
+  (dolist (mode '(markdown-mode gfm-mode))
+    (dolist (wrapper '(nil t))
+      (let (traces)
+        (dolist (enabled '(nil t))
+          (vlorg-test--markdown-buffer mode
+              (concat "A | B\n--- | ---\n"
+                      (apply #'concat (make-list 180
+                                                 (concat "x | " (make-string 220 ?x) "\n"))))
+            (setq-local truncate-lines t scroll-preserve-screen-position t)
+            (when wrapper
+              (use-local-map (copy-keymap (current-local-map)))
+              (with-suppressed-warnings ((interactive-only next-line previous-line))
+                (local-set-key [next] (lambda () (interactive) (next-line 35)))
+                (local-set-key [prior] (lambda () (interactive) (previous-line 35)))))
+            (forward-line 40) (forward-char 100)
+            (when enabled (visual-line-mode-org-mode 1))
+            (set-window-start (selected-window)
+                              (save-excursion (forward-line -10) (point)))
+            (redisplay t)
+            (let (trace)
+              (dolist (event '(next next prior prior))
+                (execute-kbd-macro (vector event))
+                (redisplay t)
+                (push (list (line-number-at-pos)
+                            (let ((buffer-invisibility-spec nil)) (current-column))
+                            (line-number-at-pos (window-start))) trace))
+              (push (nreverse trace) traces))))
+        (should (equal (car traces) (cadr traces)))))))
+
+(ert-deftest vlorg-markdown-keyboard-navigation ()
+  (skip-unless (not noninteractive))
+  (dolist (mode '(markdown-mode gfm-mode))
+    (vlorg-test--markdown-buffer mode vlorg-test--markdown-text
+      (forward-line 4) (forward-char 100)
+      (visual-line-mode-org-mode 1)
+      (redisplay t)
+      (execute-kbd-macro (kbd "C-n"))
+      (redisplay t)
+      (should (= (line-number-at-pos) 6))
+      (should (= (let ((buffer-invisibility-spec nil)) (current-column)) 100))
+      (execute-kbd-macro (kbd "<end>"))
+      (redisplay t)
+      (should (eolp))
+      (should-not (invisible-p (1- (point))))
+      (execute-kbd-macro (kbd "<home>"))
+      (redisplay t)
+      (should (bolp))
+      (should (vlorg-test--one-screen-row-p))
+      (execute-kbd-macro (kbd "C-n"))
+      (should (bolp))
+      (should-not (visual-line-mode-org--table)))))
+
 ;;; visual-line-mode-org-test.el ends here
