@@ -12,6 +12,11 @@ It works in `org-mode`, `markdown-mode`, and `gfm-mode`.
 Only the display changes. Your file is not reformatted, and no line breaks are
 inserted.
 
+![The same Org document with visual-line-table-mode disabled (left) and enabled (right)](visual-line-table-mode-comparison.png)
+
+Left: mode disabled. Right: mode enabled. Both windows use the same document,
+font, and width, with prose wrapping enabled.
+
 ## Project goals
 
 - Make prose and wide tables comfortable to read in the same Org or Markdown buffer.
